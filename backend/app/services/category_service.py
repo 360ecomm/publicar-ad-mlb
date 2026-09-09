@@ -189,10 +189,22 @@ class CategoryService:
 
         has_unfilled_required = False
 
+        # `EMPTY_GTIN_REASON` e `GTIN` chegam do ML com a MESMA tag,
+        # `conditional_required` (nenhum e `required`): o ML exige um OU o
+        # outro. A API nao diz de que o "conditional" depende, entao a
+        # dependencia e regra nossa — mas gateada pela tag: `required` puro
+        # continua sendo obedecido. Sem isso, todo anuncio com EAN valido
+        # parava em `pending_seller_attributes` por um atributo OCULTO que o
+        # proprio ML nao pediria, e em lote nenhum SKU chegava as imagens.
+        gtin_preenchido = bool(prefill.get("GTIN"))
+
         for attr in raw_attrs:
             attr_id: str = attr["id"]
             tags = attr.get("tags", {})
-            is_required: bool = bool(tags.get("required", False) or tags.get("conditional_required", False))
+            condicional = bool(tags.get("conditional_required", False))
+            if attr_id == "EMPTY_GTIN_REASON" and condicional and gtin_preenchido:
+                condicional = False
+            is_required: bool = bool(tags.get("required", False) or condicional)
             attr_type: str = attr.get("value_type", "string")
             allowed: list | None = attr.get("values") or None
 
