@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4
-from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, SmallInteger, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, LargeBinary, SmallInteger, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
@@ -70,6 +70,36 @@ CANDIDATE_SORT_ORDER_FLOOR = 90
 
 class ListingImage(Base):
     __tablename__ = "listing_images"
+    # Indices unicos PARCIAIS que fecham a corrida de promote_cover /
+    # promote_specs (migration 3d8f1b2c9e47). `with_for_update()` so
+    # serializa promocoes que disputem as MESMAS linhas; duas promocoes de
+    # alvos diferentes travavam linhas disjuntas e terminavam ambas aprovadas
+    # no mesmo slot. Com o indice, a segunda falha no commit e o service
+    # devolve 409.
+    #
+    # `approved` esta no predicado de proposito: o pipeline grava `cover_ai`
+    # em sort_order 0 com approved=False, e uma regeracao pode deixar duas
+    # linhas assim — o que nao pode existir e' mais de UMA APROVADA no slot.
+    # As listas de kinds sao literais aqui (nao f-string sobre os frozensets)
+    # para o DDL ser identico ao da migration, byte a byte.
+    __table_args__ = (
+        Index(
+            "uq_listing_images_cover_slot",
+            "listing_id",
+            unique=True,
+            postgresql_where=text(
+                "approved AND sort_order = 0 AND kind IN ('cover_deterministic', 'cover_ai')"
+            ),
+        ),
+        Index(
+            "uq_listing_images_specs_slot",
+            "listing_id",
+            unique=True,
+            postgresql_where=text(
+                "approved AND sort_order < 90 AND kind IN ('card_specs', 'specs_ai')"
+            ),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     listing_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("listings.id"), nullable=False)

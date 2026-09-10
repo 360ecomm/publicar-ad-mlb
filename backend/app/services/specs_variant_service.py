@@ -28,6 +28,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 
 from app.models.listing_attribute import ListingAttribute
@@ -313,7 +314,16 @@ async def promote_specs(db, listing, image_id: UUID) -> None:
     if not changed:
         return
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Indice unico parcial `uq_listing_images_specs_slot`: outra promocao
+        # aprovou uma ficha na galeria entre a nossa leitura e o commit.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Outra promoção de ficha técnica já está em andamento neste anúncio; tente de novo.",
+        )
     logger.info(
         "specs_promote listing_id=%s promoted_id=%s slot=%s demoted_ids=%s",
         listing.id,
