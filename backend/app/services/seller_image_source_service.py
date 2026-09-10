@@ -18,6 +18,15 @@ RAW_PHOTOS_MAX = 10
 # Mantido por compatibilidade: era o teto rigido antigo, hoje e so o minimo.
 RAW_PHOTOS_PER_SKU = RAW_PHOTOS_MIN
 
+# Extensoes sondadas por posicao, NESTA ordem: a primeira que existir vence e
+# as demais nem sao consultadas. Mistura de formato no mesmo SKU e' permitida
+# (`{sku}-1.jpg` + `{sku}-2.png`). Sao os tres formatos que o motor de edicao
+# (OpenAI /v1/images/edits, GPT image models) aceita como entrada; qualquer
+# outro e' convertido para JPEG na hora da chamada, em `OpenAIEditEngine`.
+# Custo: um indice AUSENTE agora custa 3 requests (uma por extensao) antes de
+# encerrar a descoberta, em vez de 1.
+RAW_PHOTO_EXTENSIONS = ("jpg", "png", "webp")
+
 
 async def resolve_listing_skus(listing) -> list[str]:
     """Resolve a lista de SKUs componentes do anúncio. Hoje um anúncio sempre
@@ -46,28 +55,37 @@ async def fetch_raw_photos(raw_base_url: str, sku: str) -> list[bytes] | None:
     async with httpx.AsyncClient(timeout=15.0) as client:
         for n in range(1, RAW_PHOTOS_MAX + 1):
             obrigatoria = n <= RAW_PHOTOS_MIN
-            url = f"{raw_base_url}/{sku}-{n}.jpg"
-            try:
-                resp = await client.get(url)
-            except httpx.HTTPError as exc:
+            content = await _buscar_indice(client, raw_base_url, sku, n)
+            if content is None:
                 if obrigatoria:
                     return None
-                # Falha de rede numa foto extra e ambigua (pode ser
-                # transitoria). Encerrar a descoberta e usar o que ja veio e
-                # melhor que derrubar um SKU que tem o minimo.
-                logger.warning(
-                    "raw_photos sku=%s n=%s result=erro_rede_em_extra reason=%s",
-                    sku, n, exc,
-                )
+                # Extra ausente (ou com falha de rede em todos os formatos):
+                # encerra a descoberta e usa o que ja veio — melhor que
+                # derrubar um SKU que tem o minimo.
                 break
-            if resp.status_code != 200:
-                if obrigatoria:
-                    return None
-                break
-            photos.append(resp.content)
+            photos.append(content)
 
     logger.info("raw_photos sku=%s encontradas=%s", sku, len(photos))
     return photos
+
+
+async def _buscar_indice(client: httpx.AsyncClient, raw_base_url: str, sku: str, n: int) -> bytes | None:
+    """Foto `n` do SKU em qualquer extensao aceita, na ordem de
+    `RAW_PHOTO_EXTENSIONS`: a primeira que responder 200 vence, e as demais
+    nem sao sondadas. Falha de rede num formato conta como "nao e' este" e
+    passa ao proximo; so devolve None se nenhum formato existir."""
+    for ext in RAW_PHOTO_EXTENSIONS:
+        url = f"{raw_base_url}/{sku}-{n}.{ext}"
+        try:
+            resp = await client.get(url)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "raw_photos sku=%s n=%s ext=%s result=erro_rede reason=%s", sku, n, ext, exc,
+            )
+            continue
+        if resp.status_code == 200:
+            return resp.content
+    return None
 
 
 async def fetch_all_raw_photos(raw_base_url: str, skus: list[str]) -> dict[str, list[bytes]] | None:

@@ -52,7 +52,9 @@ class TestDescoberta:
 
         assert fotos == [b"foto1", b"foto2"]
         # sondou a 3a e parou; nao pode varrer ate o teto a toa
-        assert cli.get.await_count == 3
+        # 1 request por foto existente + 3 (jpg, png, webp) para o indice ausente
+        # que encerra a descoberta — as FOTOS descobertas continuam identicas.
+        assert cli.get.await_count == 5
 
     @pytest.mark.asyncio
     async def test_cinco_fotos_todas_descobertas(self):

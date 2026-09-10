@@ -23,6 +23,49 @@ _MODELS_WITH_ARBITRARY_SIZE = ("gpt-image-2",)
 _FALLBACK_SQUARE_SIZE = "1024x1024"
 
 
+# Formatos que o /v1/images/edits aceita como ENTRADA nos GPT image models:
+# png, webp e jpg (documentacao oficial da OpenAI). Detectados pelos bytes
+# (magic number), nao pela extensao no bucket — o nome e o MIME do multipart
+# refletem o conteudo real. Antes tudo ia como `input_i.jpg`/`image/jpeg`,
+# o que so funcionava porque o bucket so tinha JPEG.
+_MAGIC = (
+    (b"\xff\xd8\xff", "jpg", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "png", "image/png"),
+)
+
+
+def _sniff(img: bytes) -> tuple[str, str] | None:
+    for magic, ext, mime in _MAGIC:
+        if img.startswith(magic):
+            return ext, mime
+    if img[:4] == b"RIFF" and img[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    return None
+
+
+def _as_upload(i: int, img: bytes) -> tuple[str, bytes, str]:
+    """`(nome, bytes, mime)` do multipart. Formato fora do contrato (gif,
+    bmp, tiff...) e' convertido para JPEG com Pillow aqui, na hora da
+    chamada — o bucket do seller continua aceitando o que aceitava."""
+    sniffed = _sniff(img)
+    if sniffed is not None:
+        ext, mime = sniffed
+        return f"input_{i}.{ext}", img, mime
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(img)) as im:
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, format="JPEG", quality=95)
+    except Exception:
+        # Nem o Pillow reconhece: manda como esta, com o nome de sempre, e a
+        # API decide. Quebrar aqui esconderia o erro real do motor.
+        return f"input_{i}.jpg", img, "image/jpeg"
+    return f"input_{i}.jpg", buf.getvalue(), "image/jpeg"
+
+
 def _accepts_input_fidelity(model: str) -> bool:
     return not model.startswith(_MODELS_WITHOUT_INPUT_FIDELITY)
 
@@ -50,10 +93,7 @@ class OpenAIEditEngine:
         motor — e o que permite um perfil futuro pedir outro formato sem
         tocar aqui. Omitido, o comportamento e o de sempre.
         """
-        files = [
-            ("image[]", (f"input_{i}.jpg", img, "image/jpeg"))
-            for i, img in enumerate(images)
-        ]
+        files = [("image[]", _as_upload(i, img)) for i, img in enumerate(images)]
         model = self.settings.openai_image_model
         data = {
             "model": model,
