@@ -20,6 +20,33 @@ Ou seja: só quebra o que realmente tentaria sair para a rede.
 """
 import pytest
 
+# ── Celery em memória ────────────────────────────────────────────────────────
+#
+# O `celery_app` nasce com `broker=settings.redis_url`: o Redis REAL do
+# ambiente onde a suíte roda. Testes que exercitam o dispatch de verdade
+# (`.delay()` / `chain(...).delay()` sem patch) publicavam tasks nesse Redis —
+# 8 `generate_description` por rodada, medido com o worker parado. Em
+# produção, onde a suíte roda dentro da imagem depois do deploy, o worker
+# consumia essas tasks e falhava com NoResultFound (ids fictícios). Foi
+# inofensivo por acaso, não por design.
+#
+# Transporte `memory://` do kombu: publicar continua funcionando (o código de
+# produção não muda), mas a mensagem fica num dicionário deste processo e
+# morre com ele. Não é `task_always_eager`: eager EXECUTARIA a task inline,
+# contra os mocks do teste — o oposto do que queremos.
+#
+# Precisa acontecer no import do conftest, antes de qualquer módulo de teste
+# importar tasks: a conexão do Celery é preguiçosa, então trocar a conf aqui
+# vale para toda publicação feita depois. `test_celery_isolado.py` confere.
+from app.workers.celery_app import celery_app
+
+celery_app.conf.update(
+    broker_url="memory://",
+    result_backend="cache+memory://",
+    task_always_eager=False,
+    broker_connection_retry_on_startup=False,
+)
+
 _ALLOW_MARK = "allow_network"
 
 
