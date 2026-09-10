@@ -4,6 +4,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.models.listing import Listing
+from app.services.brand_field import real_brand
 from app.models.listing_attribute import ListingAttribute
 from app.models.seller import Seller
 
@@ -180,9 +181,11 @@ class CategoryService:
             "ITEM_CONDITION": "Novo" if listing.condition == "new" else "Usado",
         }
 
-        # BRAND: só preenche se houver marca real (não placeholder "Sem marca")
-        brand = (listing.sku_brand or "").strip()
-        if brand and brand.lower() != "sem marca":
+        # BRAND: só preenche se houver marca real. O que é placeholder
+        # ("Sem marca", vazio...) é decidido em `brand_field.real_brand`, o
+        # mesmo helper dos prompts — um lugar só.
+        brand = real_brand(listing.sku_brand)
+        if brand:
             prefill["BRAND"] = brand
 
         # GTIN: só preenche se o EAN for uma sequência numérica de comprimento válido

@@ -1,11 +1,20 @@
 import re
 
 
+from app.services.brand_field import real_brand
+
+
+def _brand_line(value) -> str:
+    """Linha "Marca: X" so com marca real; vazio ou placeholder omite a linha."""
+    marca = real_brand(value)
+    return f"Marca: {marca}" if marca else ""
+
+
 # ── Variable resolution ────────────────────────────────────────────────────────
 
 _TOKEN_MAP = {
     "{descricao_erp}":       lambda d: d.get("sku_description") or "",
-    "{marca}":                lambda d: d.get("sku_brand") or "",
+    "{marca}":                lambda d: real_brand(d.get("sku_brand")) or "",
     "{modelo}":               lambda d: d.get("sku_model") or "",
     "{referencia_tecnica}":   lambda d: d.get("technical_reference") or "",
     "{aplicacao_veiculo}":    lambda d: d.get("vehicle_application") or "",
@@ -73,6 +82,8 @@ def build_title_prompt(
     resolved_example = _resolve_structure(structure, product_data)
 
     ean_line = f"EAN/GTIN: {ean}" if ean else ""
+    # Marca real ou nada: placeholder ("Sem marca") e vazio omitem a linha.
+    brand_line = _brand_line(sku_brand)
     seo_line = f"Contexto SEO adicional: {seo_context}" if seo_context else ""
     extra_rules_line = f"\nREGRAS ESPECÍFICAS DESTE SELLER:\n{extra_rules}" if extra_rules else ""
 
@@ -97,7 +108,7 @@ produto que não esteja na origem.
 {extra_rules_line}
 PRODUTO:
 Descrição do ERP: {sku_description}
-Marca: {sku_brand}
+{brand_line}
 Condição: {condition_pt}
 {ean_line}
 {seo_line}
@@ -119,7 +130,7 @@ REGRAS OBRIGATÓRIAS:
 {extra_rules_line}
 PRODUTO:
 Descrição do ERP: {sku_description}
-Marca: {sku_brand}
+{brand_line}
 Condição: {condition_pt}
 {ean_line}
 {seo_line}
@@ -151,7 +162,7 @@ REGRAS:
 
 DADOS DO PRODUTO:
 Título do anúncio: {listing_data.get("selected_title") or listing_data.get("title")}
-Marca: {listing_data.get("sku_brand") or listing_data.get("brand")}
+{_brand_line(listing_data.get("sku_brand") or listing_data.get("brand"))}
 Condição: {condition_pt}
 Descrição original: {listing_data.get("sku_description") or listing_data.get("description")}
 
@@ -191,7 +202,7 @@ REGRAS OBRIGATÓRIAS:
 DADOS DE ORIGEM:
 Título do anúncio: {source.get("selected_title") or ""}
 Descrição do ERP: {source.get("sku_description") or ""}
-Marca: {source.get("sku_brand") or ""}
+{_brand_line(source.get("sku_brand"))}
 Modelo: {source.get("sku_model") or ""}
 
 ATRIBUTOS CONFIRMADOS:
