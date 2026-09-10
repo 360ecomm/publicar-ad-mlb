@@ -202,6 +202,20 @@ async def resume_raw_photos(
     return ListingSummary.model_validate(listing)
 
 
+@router.post("/{listing_id}/pipeline/resume_ai_engine", response_model=ListingSummary)
+async def resume_ai_engine(
+    listing_id: UUID,
+    active_seller=Depends(get_active_seller),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retomada manual de `pending_ai_engine` (credito OpenAI recarregado):
+    redispara a geracao agora, sem esperar o proximo ciclo do beat."""
+    svc = ListingService(db)
+    listing = await svc.get_or_404(listing_id, active_seller.id)
+    await svc.resume_ai_engine(listing)
+    return ListingSummary.model_validate(listing)
+
+
 @router.post("/{listing_id}/images/approve", response_model=ListingSummary)
 async def approve_images(
     listing_id: UUID,

@@ -99,6 +99,13 @@ export async function resumeRawPhotos(id: string): Promise<ListingSummary> {
   )
 }
 
+export async function resumeAiEngine(id: string): Promise<ListingSummary> {
+  return apiFetch<ListingSummary>(
+    `/api/v1/listings/${id}/pipeline/resume_ai_engine`,
+    { method: "POST" }
+  )
+}
+
 export async function approveImages(
   id: string,
   approved_ids: string[]

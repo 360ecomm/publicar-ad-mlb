@@ -294,6 +294,23 @@ class ListingService:
                 detail=standby.missing_photos_message(listing.sku_external_id or "?"),
             )
 
+    async def resume_ai_engine(self, listing: Listing) -> None:
+        """Retomada MANUAL de `pending_ai_engine` (credito recarregado, chave
+        trocada), sem esperar o beat. Nao ha pre-checagem: redispara e o
+        worker decide."""
+        from app.services import ai_engine_standby_service as standby
+
+        if listing.status != standby.PENDING_AI_ENGINE:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Retomada por motor de IA indisponível no status '{listing.status}'",
+            )
+        if not await standby.try_resume_ai_engine(self.db, listing):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Este anúncio acabou de ser retomado por outra ação; aguarde.",
+            )
+
     async def approve_images(
         self, listing: Listing, approved_ids: list[UUID], review_seconds: int | None = None
     ) -> None:

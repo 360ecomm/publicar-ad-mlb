@@ -420,7 +420,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `ai_tasks.py` — `generate_title`, `generate_description`
 - `category_tasks.py` — `predict_category` (batch: atomic UPDATE + Celery chain se sem attrs pendentes)
 - `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; sem foto bruta no bucket → `pending_raw_photos`, nunca fallback; `ensure_dimensions` antes do upload)
-- `raw_photo_tasks.py` — `check_pending_raw_photos`: **única tarefa do celery_beat** (a cada 15 min), retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + mesma chain do lote) 
+- `raw_photo_tasks.py` — `check_pending_raw_photos` (beat, 15 min): retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + mesma chain do lote)
+- `ai_engine_tasks.py` — `check_pending_ai_engine` (beat, 15 min): redispara listings em `pending_ai_engine` (motor OpenAI fora: crédito, 401/403, 5xx, timeout). Sem pré-checagem, a OpenAI não expõe saldo: tentar é a checagem. `_tentar` deixa `ImageEngineUnavailableError` subir na última tentativa e o worker aborta a geração inteira (rollback das posições parciais) em vez de seguir com galeria parcial ou cair em `failed` 
 - `publish_tasks.py` — `publish_listing` (MLValidationError → failed sem retry)
 - `batch_tasks.py` — `process_batch` (lê planilha, cria listings, dispara pipeline)
 
@@ -475,6 +476,7 @@ draft
                                                                                        └─(pending_description)──► [manual: pipeline/generate_images]
                                                                                                                     └─(batch: auto)──► generating_images
                                                                                                                                          └─(sem {sku}-1.jpg/-2.jpg no bucket)──► pending_raw_photos ──(beat 15 min ou resume_raw_photos)──► generating_images
+                                                                                                                                         └─(OpenAI indisponível: crédito/401/403/5xx/timeout)──► pending_ai_engine ──(beat 15 min ou resume_ai_engine)──► generating_images
                                                                                                                                          └─(worker OK)──► pending_image_approval [manual]
                                                                                                                                                              └─(images/approve)──► generating_description
                                                                                                                                          └─(batch: auto-aprova)──► generating_description
@@ -566,6 +568,8 @@ POST   /api/v1/listings/{id}/pipeline/publish
 POST   /api/v1/listings/{id}/activate                    published_paused → published
 POST   /api/v1/listings/{id}/pipeline/resume_raw_photos  retomada manual de pending_raw_photos (409 se as fotos ainda faltam)
 GET    /api/v1/system/pending-raw-photos                 contagem/lista dos listings do seller em pending_raw_photos
+POST   /api/v1/listings/{id}/pipeline/resume_ai_engine   retomada manual de pending_ai_engine (motor OpenAI fora / crédito)
+GET    /api/v1/system/pending-ai-engine                  contagem/lista dos listings do seller em pending_ai_engine
 
 POST   /api/v1/listings/{id}/images/cover-ai-variant     candidato cover_ai (sort_order 90)
 POST   /api/v1/listings/{id}/images/specs-ai-variant     candidato specs_ai (sort_order 91)
