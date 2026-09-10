@@ -1,7 +1,7 @@
 "use client"
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { getListing, retryPipeline, deleteListing, generateImages, resumeRawPhotos } from "@/lib/api/listings"
+import { getListing, retryPipeline, deleteListing, generateImages, resumeRawPhotos, resumeAiEngine } from "@/lib/api/listings"
 import { formatPrice, formatQuantity } from "@/lib/utils"
 import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -68,6 +68,18 @@ export default function ListingDetailPage() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "As fotos ainda não estão no bucket")
+    },
+  })
+
+  const resumeAiEngineMutation = useMutation({
+    mutationFn: () => resumeAiEngine(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["listing", id] })
+      queryClient.invalidateQueries({ queryKey: ["listings"] })
+      toast.success("Geração de imagens retomada. Se o motor continuar indisponível, o anúncio volta a esperar.")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Não foi possível retomar agora")
     },
   })
 
@@ -308,6 +320,39 @@ export default function ListingDetailPage() {
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : null}
               Verificar fotos agora
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {status === "pending_ai_engine" && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardHeader>
+            <CardTitle className="text-base text-amber-900 flex items-center gap-2">
+              <AlertCircle className="w-5 h-5" />
+              Aguardando o motor de imagem (crédito OpenAI)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-amber-800 mb-3">
+              O motor de imagem respondeu como indisponível: crédito esgotado, chave inválida
+              ou instabilidade. O sistema tenta de novo sozinho a cada 15 minutos; depois de
+              recarregar o crédito, você pode tentar agora.
+            </p>
+            {listing.error_message && (
+              <p className="text-sm text-amber-800 mb-4 p-3 bg-amber-100 rounded-md font-mono">
+                {listing.error_message}
+              </p>
+            )}
+            <Button
+              className="w-full"
+              disabled={resumeAiEngineMutation.isPending}
+              onClick={() => resumeAiEngineMutation.mutate()}
+            >
+              {resumeAiEngineMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : null}
+              Tentar agora
             </Button>
           </CardContent>
         </Card>

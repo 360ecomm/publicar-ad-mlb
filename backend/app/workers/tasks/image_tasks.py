@@ -129,7 +129,35 @@ async def _generate_images_async(listing_id: str) -> dict:
         ).scalar_one()
         access_token = await _fetch_upload_token(seller, db)
 
-        i2i_saved = await _try_i2i_generation(db, listing, seller, access_token)
+        from app.services.image_engines.base import ImageEngineUnavailableError
+
+        try:
+            i2i_saved = await _try_i2i_generation(db, listing, seller, access_token)
+        except ImageEngineUnavailableError as exc:
+            # Motor de IA fora (credito OpenAI esgotado, chave invalida, 5xx
+            # persistente, timeout): STANDBY dedicado, nao `failed` generico.
+            # O rollback descarta as posicoes que esta tentativa ja tinha
+            # gravado na sessao — a retomada regenera as 5 do zero, em vez de
+            # deixar galeria parcial ou duplicar posicoes. Depois do rollback o
+            # objeto expira; recarrega antes de escrever.
+            from app.services.ai_engine_standby_service import (
+                PENDING_AI_ENGINE,
+                engine_error_message,
+            )
+
+            await db.rollback()
+            listing = (
+                await db.execute(select(Listing).where(Listing.id == listing_id))
+            ).scalar_one()
+            listing.status = PENDING_AI_ENGINE
+            listing.error_message = engine_error_message(exc)
+            await db.commit()
+            logger.warning(
+                "ai_engine_standby listing_id=%s sku=%s result=motor_indisponivel reason=%s",
+                listing.id, sku, exc,
+            )
+            return {"listing_id": listing_id, "pending_ai_engine": True}
+
         if i2i_saved is not None:
             if i2i_saved == 0:
                 raise RuntimeError("Nenhuma imagem válida foi gerada pelo motor 'openai_edit'")
@@ -227,6 +255,8 @@ async def _tentar(descricao: str, listing_id, fabrica, tentativas: int = _TENTAT
     existe porque a falha tipica do motor e transiente (timeout, 5xx), e
     perder uma posicao inteira por isso seria caro.
     """
+    from app.services.image_engines.base import ImageEngineUnavailableError
+
     for tentativa in range(1, tentativas + 1):
         try:
             return await fabrica()
@@ -236,6 +266,14 @@ async def _tentar(descricao: str, listing_id, fabrica, tentativas: int = _TENTAT
                 listing_id, descricao, tentativa, tentativas, exc,
                 exc_info=(tentativa == tentativas),
             )
+            # Motor indisponivel (credito esgotado, 401/403, 5xx persistente,
+            # timeout) na ULTIMA tentativa: nao e' falha desta posicao, e' do
+            # motor — as outras vao falhar igual. Sobe para abortar a geracao
+            # inteira e por o listing em `pending_ai_engine`. Antes, isto era
+            # engolido: 10 chamadas pagas-que-falham por tentativa, e se o
+            # credito acabasse no meio o anuncio seguia com galeria parcial.
+            if tentativa == tentativas and isinstance(exc, ImageEngineUnavailableError):
+                raise
     return None
 
 
