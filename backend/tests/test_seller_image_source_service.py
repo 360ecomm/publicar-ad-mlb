@@ -39,7 +39,9 @@ class TestFetchRawPhotos:
         mock_get = AsyncMock(side_effect=[
             _mock_response(200, b"photo1-bytes"),
             _mock_response(200, b"photo2-bytes"),
-            _mock_response(404),
+            _mock_response(404),  # -3.jpg
+            _mock_response(404),  # -3.png
+            _mock_response(404),  # -3.webp — encerra a descoberta
         ])
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__.return_value.get = mock_get
@@ -53,7 +55,9 @@ class TestFetchRawPhotos:
     async def test_returns_none_when_second_photo_missing(self):
         mock_get = AsyncMock(side_effect=[
             _mock_response(200, b"photo1-bytes"),
-            _mock_response(404),
+            _mock_response(404),  # -2.jpg
+            _mock_response(404),  # -2.png
+            _mock_response(404),  # -2.webp: obrigatoria ausente em todo formato
         ])
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client_cls.return_value.__aenter__.return_value.get = mock_get
