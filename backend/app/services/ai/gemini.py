@@ -102,7 +102,15 @@ class GeminiProvider(AIProvider):
 
     async def generate_card_copy(self, source: dict) -> dict:
         prompt = build_card_copy_prompt(source)
-        text = await self._call(prompt, max_tokens=1200, temperature=0.4, task="card_copy")
+        # Saida curta e estruturada (2-3 cards com titulo + bullets): thinking
+        # desligado, como no titulo em lote. Com thinking ligado e teto 1200, o
+        # gemini-3.8-flash gastou 1125 tokens pensando e a copy chegou cortada
+        # (finish=MAX_TOKENS) — o service devolveu [] e a posicao 3 (benefits_ai)
+        # do T38 simplesmente nao saiu, sem erro. Teto 2000 porque o budget 0 e'
+        # melhor esforco: quando o modelo pensa mesmo assim, ainda cabe.
+        text = await self._call(
+            prompt, max_tokens=2000, temperature=0.4, thinking=False, task="card_copy"
+        )
         parsed = json.loads(_extract_json(text))
         if not isinstance(parsed, dict):
             raise RuntimeError(f"Gemini não retornou um JSON de card válido: {text[:300]!r}")
