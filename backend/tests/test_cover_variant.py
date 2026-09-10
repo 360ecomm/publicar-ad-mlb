@@ -37,9 +37,27 @@ def _make_listing():
 
 def _make_cover(image_bytes, source_sku="SKU0001"):
     cover = MagicMock()
-    cover.image_bytes = image_bytes
+    cover._bytes = image_bytes
+    cover.asset_key = "asset-key-capa" if image_bytes is not None else None
     cover.source_sku = source_sku
     return cover
+
+# R2 em memoria: o service le/grava bytes no bucket de ativos; aqui, `_bytes`
+# no proprio mock da capa faz o papel do objeto no R2.
+_R2 = {}
+
+
+@pytest.fixture(autouse=True)
+def _r2_em_memoria():
+    async def _load(img):
+        return getattr(img, "_bytes", None)
+
+    store = AsyncMock(return_value="asset-key-teste")
+    with patch("app.services.r2_asset_service.load_candidate_bytes", side_effect=_load), \
+         patch("app.services.r2_asset_service.store_candidate_bytes", store):
+        _R2["store"] = store
+        yield
+
 
 
 class TestGenerateCoverVariantSuccess:
@@ -132,7 +150,7 @@ class TestGenerateCoverVariantMissingCover:
 
     @pytest.mark.asyncio
     async def test_cover_without_saved_bytes_raises_and_never_calls_engine(self):
-        """Capa existe (registro pré-Task 1), mas image_bytes é NULL: nunca
+        """Capa existe (registro pré-Task 1), mas nao ha bytes no R2: nunca
         chamar o motor pago — o request não pode ter sucesso de jeito nenhum."""
         from app.services.cover_variant_service import (
             CoverVariantError,
@@ -391,7 +409,7 @@ class TestCoverLookupWithDuplicateCovers:
 
     @pytest.mark.asyncio
     async def test_cover_query_skips_byteless_rows_and_takes_the_newest(self):
-        """A linha `validation_failed` tem `image_bytes=None` e nunca serve de
+        """A linha `validation_failed` nao tem chave no R2 e nunca serve de
         origem; entre as que têm bytes, a mais recente é a publicada. Isso é
         decidido no SQL (o mock não filtra nada), então é o SQL que se
         inspeciona aqui."""
@@ -422,7 +440,7 @@ class TestCoverLookupWithDuplicateCovers:
             await generate_cover_variant(mock_db, listing, "token-xyz")
 
         sql = str(mock_db.execute.await_args_list[0].args[0])
-        assert "listing_images.image_bytes IS NOT NULL" in sql, sql
+        assert "listing_images.asset_key IS NOT NULL" in sql, sql
         assert "ORDER BY listing_images.created_at DESC" in sql, sql
         assert "LIMIT" in sql, sql
 
@@ -555,5 +573,6 @@ class TestRejectedCandidateStaysReviewable:
         assert candidate.status == "validation_failed"
         assert candidate.ml_picture_id is None
         assert candidate.approved is False
-        assert candidate.image_bytes == b"o-que-a-ia-produziu"
+        assert _R2["store"].await_args.args[0] == b"o-que-a-ia-produziu", "bytes crus vao ao R2"
+        assert candidate.asset_key == "asset-key-teste"
         assert candidate.validation_error == verdict.reason

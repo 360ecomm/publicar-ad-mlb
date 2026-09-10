@@ -7,7 +7,7 @@ endpoint dedicado, revisa o resultado e decide se ele deve virar a capa
 publicada (a promoção — `promote_cover`, abaixo — também é Frente A).
 
 A variante parte SEMPRE dos bytes que já subiram para o ML na capa
-determinística (`ListingImage.image_bytes`), nunca de uma re-derivação da foto
+determinística (bytes no R2, via `ListingImage.asset_key`), nunca de uma re-derivação da foto
 bruta — o seller pode ter trocado a foto depois, e nesse caso a variante
 precisa continuar fiel ao que está publicado, não ao que está no bucket hoje.
 """
@@ -17,7 +17,6 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import defer
 
 from app.models.listing_image import (
     COVER_AI_KIND,
@@ -133,18 +132,17 @@ async def _load_latest_deterministic_cover(db, listing):
     Nao usa `scalar_one_or_none`: um anuncio pode ter VARIAS linhas
     `cover_deterministic`. Nada no sistema apaga `ListingImage`, e cada
     passada de `_try_i2i_generation` insere uma — inclusive uma linha
-    `validation_failed` com `image_bytes=None` quando a QA reprova. Uma
+    `validation_failed` sem chave no R2 quando a QA reprova. Uma
     segunda passada (retry_pipeline -> submit_attributes -> generate_images,
     ou a retomada de `pending_raw_photos`) cria a segunda linha, e ai
     `scalar_one_or_none` estouraria `MultipleResultsFound` — um 500 opaco no
     lugar do 409 deliberado.
 
-    `image_bytes.isnot(None)` exclui as linhas sem bytes (que nunca serviriam
+    `asset_key.isnot(None)` exclui as linhas sem bytes no R2 (que nunca serviriam
     de origem para a variante), e `created_at DESC` escolhe a capa mais nova
     — que e a que esta publicada e, portanto, a certa para variar.
 
-    Esta e a UNICA query de `ListingImage` que carrega `image_bytes` de
-    proposito: e aqui que os bytes sao consumidos.
+    Os bytes em si vem do R2 (`load_candidate_bytes`), nao do banco.
     """
     return (
         await db.execute(
@@ -152,7 +150,7 @@ async def _load_latest_deterministic_cover(db, listing):
             .where(
                 ListingImage.listing_id == listing.id,
                 ListingImage.kind == COVER_DETERMINISTIC_KIND,
-                ListingImage.image_bytes.isnot(None),
+                ListingImage.asset_key.isnot(None),
             )
             .order_by(ListingImage.created_at.desc())
             .limit(1)
@@ -178,11 +176,14 @@ async def generate_cover_variant(db, listing, access_token: str) -> ListingImage
         _resolve_requires_white_bg,
     )
 
-    cover = await _load_latest_deterministic_cover(db, listing)
+    from app.services.r2_asset_service import load_candidate_bytes, store_candidate_bytes
 
-    if cover is None or cover.image_bytes is None:
+    cover = await _load_latest_deterministic_cover(db, listing)
+    cover_bytes = await load_candidate_bytes(cover) if cover is not None else None
+
+    if cover is None or cover_bytes is None:
         raise CoverVariantError(
-            "capa deterministica sem bytes salvos — anuncio gerado antes desta funcionalidade"
+            "capa deterministica sem bytes salvos no R2 — anuncio gerado antes desta funcionalidade ou R2 indisponivel"
         )
 
     # Capa branca em TODA categoria, sem consultar a categoria-raiz. A
@@ -194,7 +195,7 @@ async def generate_cover_variant(db, listing, access_token: str) -> ListingImage
 
     engine = OpenAIEditEngine()
     variants = await engine.edit(
-        images=[cover.image_bytes], prompt=_pick_prompt(), n=1
+        images=[cover_bytes], prompt=_pick_prompt(), n=1
     )
     generated_bytes = variants[0]
 
@@ -215,8 +216,11 @@ async def generate_cover_variant(db, listing, access_token: str) -> ListingImage
             # existe para um humano julgar; descartar a imagem na reprovação
             # automática apaga a única evidência de se o QA foi justo — e a
             # geração já foi paga de qualquer forma. Sem `ml_picture_id`: nada
-            # subiu para o ML, o blob fica só no banco.
-            image_bytes=generated_bytes,
+            # subiu para o ML; os bytes crus vão ao R2 (`asset_key`).
+            asset_key=await store_candidate_bytes(
+                generated_bytes, seller_id=listing.seller_id, sku=cover.source_sku,
+                listing_id=listing.id, kind=COVER_AI_KIND,
+            ),
         )
         db.add(candidate)
         await db.commit()
@@ -234,7 +238,10 @@ async def generate_cover_variant(db, listing, access_token: str) -> ListingImage
         sort_order=COVER_AI_SORT_ORDER,
         kind=COVER_AI_KIND,
         source_sku=cover.source_sku,
-        image_bytes=prepared,
+        asset_key=await store_candidate_bytes(
+            prepared, seller_id=listing.seller_id, sku=cover.source_sku,
+            listing_id=listing.id, kind=COVER_AI_KIND,
+        ),
     )
     db.add(candidate)
     await db.commit()
@@ -305,7 +312,6 @@ async def promote_cover(db, listing, image_id: UUID) -> None:
     target = (
         await db.execute(
             select(ListingImage)
-            .options(defer(ListingImage.image_bytes))
             .where(
                 ListingImage.id == image_id,
                 ListingImage.listing_id == listing.id,
@@ -326,7 +332,6 @@ async def promote_cover(db, listing, image_id: UUID) -> None:
     others_at_cover = (
         await db.execute(
             select(ListingImage)
-            .options(defer(ListingImage.image_bytes))
             .where(
                 ListingImage.listing_id == listing.id,
                 ListingImage.sort_order == COVER_SORT_ORDER,

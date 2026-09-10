@@ -27,7 +27,7 @@ def _make_listing():
 
 
 def _make_cover(listing_id, image_bytes, source_sku="SKU0001"):
-    return ListingImage(
+    cover = ListingImage(
         id=uuid4(),
         listing_id=listing_id,
         kind="cover_deterministic",
@@ -35,8 +35,27 @@ def _make_cover(listing_id, image_bytes, source_sku="SKU0001"):
         sort_order=0,
         status="uploaded",
         source_sku=source_sku,
-        image_bytes=image_bytes,
+        asset_key="asset-key-capa" if image_bytes is not None else None,
     )
+    cover._bytes = image_bytes
+    return cover
+
+# R2 em memoria: o service le/grava bytes no bucket de ativos; aqui, `_bytes`
+# no proprio mock da capa faz o papel do objeto no R2.
+_R2 = {}
+
+
+@pytest.fixture(autouse=True)
+def _r2_em_memoria():
+    async def _load(img):
+        return getattr(img, "_bytes", None)
+
+    store = AsyncMock(return_value="asset-key-teste")
+    with patch("app.services.r2_asset_service.load_candidate_bytes", side_effect=_load), \
+         patch("app.services.r2_asset_service.store_candidate_bytes", store):
+        _R2["store"] = store
+        yield
+
 
 
 def _specs_attributes():
@@ -391,6 +410,6 @@ class TestSpecsCoverLookupWithDuplicateCovers:
             await generate_specs_variant(mock_db, listing, "token-xyz")
 
         sql = str(mock_db.execute.await_args_list[0].args[0])
-        assert "listing_images.image_bytes IS NOT NULL" in sql, sql
+        assert "listing_images.asset_key IS NOT NULL" in sql, sql
         assert "ORDER BY listing_images.created_at DESC" in sql, sql
         assert "LIMIT" in sql, sql

@@ -14,6 +14,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+# R2 em memoria: o service le/grava bytes no bucket de ativos; aqui, `_bytes`
+# no proprio mock da capa faz o papel do objeto no R2.
+_R2 = {}
+
+
+@pytest.fixture(autouse=True)
+def _r2_em_memoria():
+    async def _load(img):
+        return getattr(img, "_bytes", None)
+
+    store = AsyncMock(return_value="asset-key-teste")
+    with patch("app.services.r2_asset_service.load_candidate_bytes", side_effect=_load), \
+         patch("app.services.r2_asset_service.store_candidate_bytes", store):
+        _R2["store"] = store
+        yield
+
+
 def _attr(attribute_id, attribute_name, value_name, value_id=None):
     a = MagicMock()
     a.attribute_id = attribute_id
@@ -225,7 +242,8 @@ class TestSpecsVariantUsesDeterministicBullets:
         from app.services.specs_variant_service import generate_specs_variant
 
         cover = MagicMock()
-        cover.image_bytes = b"cover-bytes"
+        cover._bytes = b"cover-bytes"
+        cover.asset_key = "asset-key-capa"
         cover.source_sku = "37"
 
         listing = MagicMock()
@@ -275,7 +293,8 @@ class TestSpecsVariantUsesDeterministicBullets:
         )
 
         cover = MagicMock()
-        cover.image_bytes = b"cover-bytes"
+        cover._bytes = b"cover-bytes"
+        cover.asset_key = "asset-key-capa"
         cover.source_sku = "37"
 
         mock_db = AsyncMock()

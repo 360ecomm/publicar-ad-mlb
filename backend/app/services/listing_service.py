@@ -3,7 +3,6 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from sqlalchemy import update as sa_update, delete as sa_delete
-from sqlalchemy.orm import defer
 from app.models.listing import Listing
 from app.models.listing_title import ListingTitle
 from app.models.listing_attribute import ListingAttribute
@@ -219,7 +218,6 @@ class ListingService:
         # pula direto para ready_to_publish sem regenerar tudo.
         approved_img = (await self.db.execute(
             select(ListingImage)
-            .options(defer(ListingImage.image_bytes))
             .where(
                 ListingImage.listing_id == listing.id,
                 ListingImage.approved == True,
@@ -324,12 +322,8 @@ class ListingService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Pelo menos uma imagem deve ser aprovada",
             )
-        # `defer(image_bytes)`: a aprovacao so mexe em approved/sort_order/
-        # status — carregar o blob de toda a galeria aqui seriam alguns MB
-        # inuteis por chamada.
         result = await self.db.execute(
             select(ListingImage)
-            .options(defer(ListingImage.image_bytes))
             .where(ListingImage.listing_id == listing.id)
         )
         images = result.scalars().all()

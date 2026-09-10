@@ -3,7 +3,6 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.orm import defer
 from app.core.dependencies import get_db, get_current_user, get_active_seller
 from app.models.listing import Listing
 from app.models.listing_description import ListingDescription
@@ -40,14 +39,8 @@ async def _load_detail(db: AsyncSession, listing: Listing) -> ListingDetail:
         .order_by(ListingAttribute.is_required.desc(), ListingAttribute.attribute_name)
     )).scalars().all()
 
-    # `defer(image_bytes)`: esta rota e polada pela UI a cada 8s e o blob
-    # tem 300-600 KB por imagem (JPEG q92 1200x1200), o que carregaria alguns
-    # MB por request so pra ser descartado — a VPS de producao tem 2 vCPU /
-    # 7.8 GiB sem swap, compartilhada. Nenhum campo de `ListingDetail` usa os
-    # bytes.
     images = (await db.execute(
         select(ListingImage)
-        .options(defer(ListingImage.image_bytes))
         .where(ListingImage.listing_id == listing.id)
         .order_by(ListingImage.sort_order)
     )).scalars().all()

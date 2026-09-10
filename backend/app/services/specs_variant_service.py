@@ -7,7 +7,7 @@ o endpoint dedicado; o resultado e um CANDIDATO para comparacao A/B com o
 `card_specs` ja existente, nunca uma substituicao automatica.
 
 A ficha tecnica IA parte SEMPRE dos bytes que ja subiram para o ML na capa
-deterministica (`ListingImage.image_bytes`, kind="cover_deterministic"),
+deterministica (bytes no R2 via `ListingImage.asset_key`, kind="cover_deterministic"),
 nunca de uma foto bruta re-derivada nem do card Pillow ja renderizado —
 mesma fonte e mesmo motivo da variante de capa (Frente A): a capa
 deterministica nunca passou por IA, entao o rotulo do produto nela e fiel.
@@ -29,7 +29,6 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import defer
 
 from app.models.listing_attribute import ListingAttribute
 from app.models.listing_image import (
@@ -130,11 +129,14 @@ async def generate_specs_variant(db, listing, access_token: str) -> ListingImage
     # `_try_i2i_generation` insere uma, inclusive uma `validation_failed` sem
     # bytes). `scalar_one_or_none` estouraria `MultipleResultsFound` — 500
     # opaco no lugar do 409 deliberado. Ver o docstring do helper.
-    cover = await _load_latest_deterministic_cover(db, listing)
+    from app.services.r2_asset_service import load_candidate_bytes, store_candidate_bytes
 
-    if cover is None or cover.image_bytes is None:
+    cover = await _load_latest_deterministic_cover(db, listing)
+    cover_bytes = await load_candidate_bytes(cover) if cover is not None else None
+
+    if cover is None or cover_bytes is None:
         raise SpecsVariantError(
-            "capa deterministica sem bytes salvos — anuncio gerado antes desta funcionalidade"
+            "capa deterministica sem bytes salvos no R2 — anuncio gerado antes desta funcionalidade ou R2 indisponivel"
         )
 
     # Query propria (nao `listing.attributes`): relacionamento lazy levantaria
@@ -154,7 +156,7 @@ async def generate_specs_variant(db, listing, access_token: str) -> ListingImage
     prompt = _build_specs_prompt(specs_copy.bullets)
 
     engine = OpenAIEditEngine()
-    variants = await engine.edit(images=[cover.image_bytes], prompt=prompt, n=1)
+    variants = await engine.edit(images=[cover_bytes], prompt=prompt, n=1)
     generated_bytes = variants[0]
 
     # Ficha tecnica nunca e capa, entao fundo branco puro nunca e exigido dela
@@ -172,7 +174,10 @@ async def generate_specs_variant(db, listing, access_token: str) -> ListingImage
             source_sku=cover.source_sku,
             # Mesma razao da Frente A: candidato reprovado continua revisavel.
             # Sem `ml_picture_id` — nada subiu para o ML.
-            image_bytes=generated_bytes,
+            asset_key=await store_candidate_bytes(
+                generated_bytes, seller_id=listing.seller_id, sku=cover.source_sku,
+                listing_id=listing.id, kind=SPECS_AI_KIND,
+            ),
         )
         db.add(candidate)
         await db.commit()
@@ -190,7 +195,10 @@ async def generate_specs_variant(db, listing, access_token: str) -> ListingImage
         sort_order=SPECS_AI_SORT_ORDER,
         kind=SPECS_AI_KIND,
         source_sku=cover.source_sku,
-        image_bytes=prepared,
+        asset_key=await store_candidate_bytes(
+            prepared, seller_id=listing.seller_id, sku=cover.source_sku,
+            listing_id=listing.id, kind=SPECS_AI_KIND,
+        ),
     )
     db.add(candidate)
     await db.commit()
@@ -241,7 +249,6 @@ async def promote_specs(db, listing, image_id: UUID) -> None:
     target = (
         await db.execute(
             select(ListingImage)
-            .options(defer(ListingImage.image_bytes))
             .where(
                 ListingImage.id == image_id,
                 ListingImage.listing_id == listing.id,
@@ -262,7 +269,6 @@ async def promote_specs(db, listing, image_id: UUID) -> None:
     ocupantes = (
         await db.execute(
             select(ListingImage)
-            .options(defer(ListingImage.image_bytes))
             .where(
                 ListingImage.listing_id == listing.id,
                 ListingImage.kind.in_(PROMOTABLE_SPECS_KINDS),

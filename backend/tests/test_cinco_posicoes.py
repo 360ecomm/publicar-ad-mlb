@@ -105,8 +105,10 @@ class _Ambiente:
             patch("app.services.image_deterministic_service.try_deterministic_cover",
                   return_value=b"capa-deterministica"),
             patch("app.services.ai.service.get_ai_provider", return_value=provider),
+            patch("app.services.r2_asset_service.store_candidate_bytes",
+                  new_callable=AsyncMock, return_value="asset-key-teste"),
         ]
-        self.engine_cls, self.prepare, self.ml_cls, self.crop, _ = [
+        self.engine_cls, self.prepare, self.ml_cls, self.crop, _, self.r2 = [
             p.start() for p in self._patches
         ]
         self.engine_cls.return_value.edit = AsyncMock(side_effect=self._edit)
@@ -211,7 +213,7 @@ class TestCincoPosicoes:
         imgs = _salvos(db)
         assert imgs, "reprovada tambem vira linha, para revisao humana"
         assert all(i.status == "validation_failed" for i in imgs)
-        assert all(i.image_bytes is not None for i in imgs)
+        assert all(i.asset_key is not None for i in imgs), "bytes crus foram ao R2"
         assert all(i.ml_picture_id is None for i in imgs)
 
     @pytest.mark.asyncio

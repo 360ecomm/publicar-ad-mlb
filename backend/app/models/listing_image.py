@@ -117,16 +117,14 @@ class ListingImage(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    # Bytes exatos que subiram para o ML, guardados para que variantes por IA
-    # partam do MESMO arquivo publicado — nao de uma re-derivacao. Re-derivar seria
-    # identico enquanto a foto bruta nao mudasse, mas o seller PODE trocar a foto
-    # (aconteceu com 37-2.jpg), e ai a variante sairia de uma imagem diferente da
-    # que esta no anuncio, sem ninguem perceber. Nullable, sem backfill: registros
-    # antigos ficam com NULL. Hoje populam esta coluna: `cover_deterministic`
-    # (sempre), `cover_ai` e `specs_ai` (candidatos por IA, quando o upload
-    # da variante tem sucesso) — nao populam: `individual`, `card_benefits`,
-    # `card_usage`, `card_specs`.
-    image_bytes: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    # Referencia (chave) dos bytes exatos desta imagem no bucket R2 de ativos
+    # (`r2_asset_service`), gravada na GERACAO — aprovada ou reprovada no QA.
+    # Substitui o blob `image_bytes` que vivia aqui ate 2026-09-10 (migration
+    # 7b2d9f4e1c58): variantes por IA partem do MESMO arquivo publicado, nao
+    # de uma re-derivacao — o seller PODE trocar a foto bruta depois
+    # (aconteceu com 37-2.jpg). NULL quando o R2 nao estava configurado ou
+    # falhou na hora, ou em linhas antigas nao migradas.
+    asset_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # Tempo que um humano levou conferindo a versao gerada por IA contra o dado
     # real. Instrumentacao manual, amostra de 10-15 SKUs — nao e analytics.
