@@ -166,6 +166,10 @@ async def generate_cover_variant(db, listing, access_token: str) -> ListingImage
     capa determinística com bytes salvos — chamar um motor pago para um
     request que não pode ter sucesso seria desperdício.
     """
+    from app.services.ai.cost_log import set_cost_context
+
+    set_cost_context(listing_id=listing.id, sku=listing.sku_external_id)
+
     from app.services.image_engines.openai_edit_engine import OpenAIEditEngine
     from app.services.image_service import MLPictureService
     from app.workers.tasks.image_tasks import (

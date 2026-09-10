@@ -20,6 +20,9 @@ async def _generate_title_async(
         result = await db.execute(select(Listing).where(Listing.id == listing_id))
         listing = result.scalar_one()
 
+        from app.services.ai.cost_log import set_cost_context
+        set_cost_context(listing_id=listing.id, sku=listing.sku_external_id)
+
         # Fetch product for structured fields and product_group
         product: Product | None = None
         if listing.product_id:
@@ -90,6 +93,9 @@ async def _generate_description_async(listing_id: str) -> dict:
         # deve ser ignorado para não sobrescrever a pausa.
         if listing.status != "generating_description":
             return {"listing_id": listing_id, "skipped": True}
+
+        from app.services.ai.cost_log import set_cost_context
+        set_cost_context(listing_id=listing.id, sku=listing.sku_external_id)
 
         attrs_result = await db.execute(
             select(ListingAttribute).where(ListingAttribute.listing_id == listing.id)

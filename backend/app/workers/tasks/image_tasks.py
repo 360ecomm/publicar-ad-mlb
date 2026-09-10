@@ -429,6 +429,11 @@ async def _generate_images_async(listing_id: str) -> dict:
         if listing.status != "generating_images":
             return {"listing_id": listing_id, "skipped": True}
 
+        # Toda chamada de IA desta task (posicoes, card copy, prompt de imagem,
+        # texto-imagem) carrega o listing/SKU na linha `ai_cost`.
+        from app.services.ai.cost_log import set_cost_context
+        set_cost_context(listing_id=listing.id, sku=listing.sku_external_id)
+
         sku = listing.sku_external_id or ""
 
         # Verifica se já existem imagens aprovadas para este SKU neste seller
