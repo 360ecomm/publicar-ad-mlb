@@ -64,12 +64,24 @@ class GeminiProvider(AIProvider):
             technical_reference=technical_reference, vehicle_application=vehicle_application,
             color=color, size=size, capacity=capacity, material=material, gender=gender,
         )
-        text = await self._call(prompt, max_tokens=500 if batch_mode else 2000, temperature=0.6)
+        # Batch: 1 titulo, saida curta, thinking DESLIGADO. O modelo por tras
+        # de `gemini-flash-latest` gastava os 500 tokens pensando e a resposta
+        # chegava cortada (finish=MAX_TOKENS, 482 tokens de thought, 14 de
+        # texto); com thinkingBudget=0 o mesmo prompt sai inteiro em 19 tokens.
+        # Mais barato e mais confiavel que subir o orcamento com thinking ligado.
+        text = await self._call(
+            prompt, max_tokens=500 if batch_mode else 2000, temperature=0.6,
+            thinking=not batch_mode,
+        )
         parsed = json.loads(_extract_json(text))
         if not isinstance(parsed, dict):
             raise RuntimeError(f"Gemini não retornou um JSON de título válido: {text[:300]!r}")
         if batch_mode:
             title = parsed.get("title", "").strip()[:60]
+            if not title:
+                # Vazio seguia ate `domain_discovery?q=` devolver 400, tres
+                # tasks depois. Falha aqui, com o texto cru para diagnostico.
+                raise RuntimeError(f"Gemini retornou título vazio em batch_mode: {text[:300]!r}")
             return [{"title": title, "score": None, "rationale": "batch_auto"}]
         titles = parsed.get("titles")
         if not isinstance(titles, list):
@@ -92,18 +104,37 @@ class GeminiProvider(AIProvider):
             raise RuntimeError(f"Gemini não retornou um JSON de card válido: {text[:300]!r}")
         return parsed
 
-    async def _call(self, prompt: str, max_tokens: int, temperature: float) -> str:
+    async def _call(
+        self, prompt: str, max_tokens: int, temperature: float, thinking: bool = True
+    ) -> str:
         url = _BASE.format(model=self.settings.gemini_model)
+        generation_config: dict = {"temperature": temperature, "maxOutputTokens": max_tokens}
+        if not thinking:
+            # `thinkingBudget: 0` desliga o raciocinio no gemini-2.5-flash (o
+            # que o alias `gemini-flash-latest` resolve hoje). `thinkingLevel`
+            # e' da familia 3 e este modelo recusa com 400.
+            generation_config["thinkingConfig"] = {"thinkingBudget": 0}
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url,
                 headers={"X-goog-api-key": self.settings.gemini_api_key},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+                    "generationConfig": generation_config,
                 },
             )
         response.raise_for_status()
-        parts = response.json()["candidates"][0]["content"]["parts"]
+        candidate = response.json()["candidates"][0]
+        # Resposta cortada NUNCA vira texto: o json_repair "consertava" o JSON
+        # pela metade e o titulo truncado seguia adiante sem ninguem ver. Se o
+        # orcamento voltar a ficar baixo demais (ou o alias trocar de modelo e
+        # ignorar o thinkingBudget), a falha e' ruidosa e diz o que aconteceu.
+        if candidate.get("finishReason") == "MAX_TOKENS":
+            raise RuntimeError(
+                f"Gemini cortou a resposta (finishReason=MAX_TOKENS, "
+                f"maxOutputTokens={max_tokens}, thinking={thinking}): "
+                f"{str(candidate.get('content', {}))[:300]!r}"
+            )
+        parts = candidate["content"]["parts"]
         # Filtra parts de "thinking" (gemini-2.5-flash/-pro emite pensamentos separados)
         return "".join(p.get("text", "") for p in parts if not p.get("thought", False))
