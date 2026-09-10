@@ -105,7 +105,6 @@ class JobOut(BaseModel):
 
 class ImageOut(BaseModel):
     id: UUID
-    url_r2: Optional[str]
     ml_picture_id: Optional[str]
     status: str
     approved: bool

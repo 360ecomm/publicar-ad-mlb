@@ -2,7 +2,6 @@ import uuid as _uuid
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.core.security import encrypt_value
 from app.models.seller_image_config import SellerImageConfig
 from app.schemas.seller_image_config import SellerImageConfigUpsert
 
@@ -25,13 +24,6 @@ class SellerImageConfigService:
             self.db.add(cfg)
         else:
             cfg.raw_base_url = payload.raw_base_url
-
-        cfg.write_bucket_name = payload.write_bucket_name
-        cfg.write_endpoint_url = payload.write_endpoint_url
-        if payload.write_access_key_id:
-            cfg.write_access_key_id_enc = encrypt_value(payload.write_access_key_id)
-        if payload.write_secret_access_key:
-            cfg.write_secret_access_key_enc = encrypt_value(payload.write_secret_access_key)
 
         await self.db.commit()
         await self.db.refresh(cfg)

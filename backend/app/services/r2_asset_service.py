@@ -1,7 +1,16 @@
 """Ativos de imagem gerados por IA num bucket R2 dedicado (write-back).
 
 O banco guarda so a referencia (`ListingImage.asset_key`); os bytes vivem no
-R2, organizados por `{seller_id}/{sku}/{listing_id}/{kind}-{token}.{ext}`.
+R2, organizados de forma LEGIVEL por humano:
+
+    {apelido_ml_do_seller}/{sku}/{kind}-{AAAAMMDD-HHMMSS}-{4hex}.jpg
+    ex.: CAFE085/37/cover_ai-20260910-234512-ab12.jpg
+
+Apelido do seller no Mercado Livre (`Seller.ml_nickname`), nao o uuid
+interno; sem camada de listing, porque essa relacao ja vive no banco. O
+timestamp (UTC) da a ordem cronologica pelo nome; o sufixo de 4 hex so
+desempata duas geracoes no mesmo segundo (retentativa rapida).
+
 Bucket DISTINTO do de fotos brutas dos sellers (que e' so leitura publica):
 este tem credencial de escrita, configurada por `R2_ASSET_BUCKET_*`.
 
@@ -17,19 +26,45 @@ as chamadas rodam em `asyncio.to_thread` para nao travar o loop.
 """
 import asyncio
 import logging
-from uuid import uuid4
+import re
+import secrets
+from datetime import datetime, timezone
 
 import boto3
+from sqlalchemy import select
 
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 _CONTENT_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
-def asset_key_for(*, seller_id, sku: str, listing_id, kind: str, token: str, ext: str = "jpg") -> str:
-    return f"{seller_id}/{sku}/{listing_id}/{kind}-{token}.{ext}"
+def seller_slug_from(nickname) -> str:
+    """Apelido do ML saneado para caminho; `seller` se vier vazio."""
+    limpo = _SAFE.sub("_", (nickname or "").strip())
+    return limpo or "seller"
+
+
+def asset_key_for(*, seller_slug: str, sku: str, kind: str, when: datetime | None = None,
+                  token: str | None = None, ext: str = "jpg") -> str:
+    """Monta a chave. UNICO ponto que conhece o formato do caminho."""
+    when = when or datetime.now(timezone.utc)
+    carimbo = when.astimezone(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    sufixo = token or secrets.token_hex(2)
+    sku_safe = _SAFE.sub("_", str(sku)) or "sku"
+    return f"{seller_slug}/{sku_safe}/{kind}-{carimbo}-{sufixo}.{ext}"
+
+
+async def seller_slug_for(db, seller_id) -> str:
+    """Apelido do ML do seller, saneado. Cai em `seller` se nao achar."""
+    from app.models.seller import Seller
+
+    nickname = (
+        await db.execute(select(Seller.ml_nickname).where(Seller.id == seller_id))
+    ).scalar_one_or_none()
+    return seller_slug_from(nickname)
 
 
 class R2AssetStore:
@@ -78,23 +113,24 @@ def get_asset_store() -> R2AssetStore:
     return _store
 
 
-async def store_candidate_bytes(data: bytes, *, seller_id, sku: str, listing_id, kind: str, ext: str = "jpg") -> str | None:
+async def store_candidate_bytes(data: bytes, *, db, seller_id, sku: str, kind: str, ext: str = "jpg") -> str | None:
     """Grava os bytes no R2 e devolve a chave; None (com aviso) se nao houver
     credencial ou o R2 falhar. Nunca levanta."""
     store = get_asset_store()
     if not store.configured:
         logger.warning(
-            "r2_asset listing_id=%s sku=%s kind=%s result=sem_credencial (R2_ASSET_BUCKET_* ausente): bytes nao persistidos",
-            listing_id, sku, kind,
+            "r2_asset sku=%s kind=%s result=sem_credencial (R2_ASSET_BUCKET_* ausente): bytes nao persistidos",
+            sku, kind,
         )
         return None
-    key = asset_key_for(seller_id=seller_id, sku=sku, listing_id=listing_id, kind=kind, token=uuid4().hex, ext=ext)
     try:
+        slug = await seller_slug_for(db, seller_id)
+        key = asset_key_for(seller_slug=slug, sku=sku, kind=kind, ext=ext)
         await store.put(key, data, _CONTENT_TYPES.get(ext, "application/octet-stream"))
     except Exception as exc:
-        logger.error("r2_asset listing_id=%s sku=%s kind=%s result=falha_no_put reason=%s", listing_id, sku, kind, exc)
+        logger.error("r2_asset sku=%s kind=%s result=falha_no_put reason=%s", sku, kind, exc)
         return None
-    logger.info("r2_asset listing_id=%s sku=%s kind=%s key=%s bytes=%s result=gravado", listing_id, sku, kind, key, len(data))
+    logger.info("r2_asset sku=%s kind=%s key=%s bytes=%s result=gravado", sku, kind, key, len(data))
     return key
 
 

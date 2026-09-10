@@ -218,8 +218,8 @@ async def generate_cover_variant(db, listing, access_token: str) -> ListingImage
             # geração já foi paga de qualquer forma. Sem `ml_picture_id`: nada
             # subiu para o ML; os bytes crus vão ao R2 (`asset_key`).
             asset_key=await store_candidate_bytes(
-                generated_bytes, seller_id=listing.seller_id, sku=cover.source_sku,
-                listing_id=listing.id, kind=COVER_AI_KIND,
+                generated_bytes, db=db, seller_id=listing.seller_id, sku=cover.source_sku,
+                kind=COVER_AI_KIND,
             ),
         )
         db.add(candidate)
@@ -239,8 +239,8 @@ async def generate_cover_variant(db, listing, access_token: str) -> ListingImage
         kind=COVER_AI_KIND,
         source_sku=cover.source_sku,
         asset_key=await store_candidate_bytes(
-            prepared, seller_id=listing.seller_id, sku=cover.source_sku,
-            listing_id=listing.id, kind=COVER_AI_KIND,
+            prepared, db=db, seller_id=listing.seller_id, sku=cover.source_sku,
+            kind=COVER_AI_KIND,
         ),
     )
     db.add(candidate)
