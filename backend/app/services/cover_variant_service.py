@@ -16,6 +16,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 
 from app.models.listing_image import (
@@ -292,19 +293,14 @@ async def promote_cover(db, listing, image_id: UUID) -> None:
     Idempotente: promover quem ja esta em sort_order=0 e sem duplicatas para
     rebaixar e um no-op (nao escreve no banco).
 
-    LIMITACAO CONHECIDA — nao fechada de proposito nesta branch de piloto:
+    CORRIDA DE ALVOS DIFERENTES — fechada em 2026-09-10 (migration 3d8f1b2c9e47):
     o `with_for_update()` acima so serializa promocoes que disputem AS MESMAS
-    linhas. Duas promocoes simultaneas de ALVOS DIFERENTES no mesmo anuncio
-    (duas abas escolhendo capas distintas) travam linhas disjuntas: cada
-    transacao le a lista de rebaixaveis antes da outra escrever, nenhuma
-    enxerga o alvo da outra, e ambas terminam em `sort_order=0`. O efeito e
-    o mesmo empate descrito acima, agora por corrida em vez de por numeracao.
-    Mitigacoes ja em vigor: a janela e de milissegundos, exige acao humana
-    concorrente no mesmo anuncio, e o estado se autocura — a proxima promocao
-    rebaixa a lista inteira e volta ao estado correto. O fim real exige um
-    indice unico parcial (`UNIQUE (listing_id) WHERE sort_order = 0 AND kind
-    IN (...)`) via migration, que nao se justifica antes de o piloto ser
-    aprovado. Ver `docs/superpowers/specs/esquema-5-posicoes.md`.
+    linhas; duas promocoes simultaneas de alvos distintos travavam linhas
+    disjuntas e terminavam ambas em `sort_order=0`. O indice unico parcial
+    `uq_listing_images_cover_slot` (UNIQUE listing_id WHERE approved AND
+    sort_order = 0 AND kind IN capa) faz a segunda falhar no commit, e o
+    `except IntegrityError` abaixo devolve 409. Provado com duas transacoes
+    reais em `tests/test_promocao_indice_unico.py`.
     """
     target = (
         await db.execute(
@@ -363,7 +359,18 @@ async def promote_cover(db, listing, image_id: UUID) -> None:
     if not changed:
         return
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Indice unico parcial `uq_listing_images_cover_slot`: outra promocao
+        # aprovou uma capa em sort_order=0 entre a nossa leitura e o commit.
+        # 409 legivel em vez de 500 opaco; o estado no banco continua valido
+        # (a outra venceu) e o operador pode simplesmente tentar de novo.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Outra promoção de capa já está em andamento neste anúncio; tente de novo.",
+        )
     logger.info(
         "cover_promote listing_id=%s promoted_id=%s demoted_ids=%s",
         listing.id,
