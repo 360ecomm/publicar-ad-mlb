@@ -10,7 +10,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Workers | Celery 5 + Redis 7 |
 | Banco de dados | PostgreSQL 16 |
 | Frontend | Next.js 14 (App Router) + TypeScript + Tailwind + shadcn/ui |
-| Storage de imagens | Cloudflare R2 (URL pública funciona; API S3 bloqueada pelo ISP) |
+| Storage de imagens | Fotos brutas: bucket público do seller (leitura por URL). Imagens geradas: bucket R2 dedicado `r2-mktp-img-ia` via API S3 (`r2_asset_service`) — **funciona da VPS; o ISP local bloqueia o endpoint S3**, então prova de R2 só a partir do servidor |
 | Infra local | Docker Compose |
 | Infra produção | **VPS própria** (`vps-360`, Ubuntu 24.04) + Docker Compose + Nginx como proxy reverso + Let's Encrypt. Backend **no ar** em `https://app.360ecomm.com.br` |
 
@@ -32,7 +32,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | SPEC-011 | ✅ | Listing upload refatorado: planilha de anúncios só tem campos de publicação; dados do produto vêm do catálogo |
 | Quick fixes F-1..F-4 | ✅ | Resiliência do pipeline de imagens: ensure_dimensions seguro, _mark_failed robusto, ImageRateLimitError + backoff 429 |
 | SPEC-012 | ✅ | Resiliência estrutural do pipeline de imagens (token refresh, idempotência, Celery chain, lock otimista) |
-| Trilha 2 · Fase 3 | ✅ | Cards de benefício: 3 imagens extras por anúncio (benefícios / modo de uso / especificações) montadas com Pillow sobre foto já gerada, texto por LLM, sem motor de IA de imagem |
+| Trilha 2 · Fase 3 | ♻️ | Cards de benefício com Pillow (benefícios / modo de uso / especificações). **Substituídos pelo esquema de 5 posições e removidos em 2026-09-10** — a copy do LLM sobrevive na posição 2 (`benefits_ai`) |
 | Fase 5a | ✅ | Artefatos de produção: `Dockerfile.prod` multi-stage non-root, `docker-compose.prod.yml`, `.dockerignore`, limites de memória. Correção de segurança: `/openapi.json` fechado fora de development |
 | Fase 5b | ✅ | Deploy na VPS: vhost + TLS, `.env` de produção gerado do zero, stack no ar, migrations aplicadas. Correção de 2 bugs de OAuth |
 | Fase 5c | ✅ | **Primeiro anúncio real publicado**: `MLB5145387291` (SKU 37, Wepink Martin). Validação de `allowed_values`, modo catálogo (`family_name`), cards a partir da capa determinística |
@@ -40,6 +40,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Ficha ancorada em atributo | ✅ | `build_specs_card` monta os bullets do `value_name` real — o `card_specs` Pillow e a variante de IA param de depender da redação do LLM |
 | **Esquema de 5 posições** | ✅ | Padrão de anúncio de **produto único** em categoria-folha com perfil (hoje só MLB6284). Em produção desde 2026-09-01 (`083ad2e`) |
 | SKU 38 | ✅ | 2º anúncio real: `MLB7574387170` (Body Splash Fatal Black For Her 200ml). Publicado com 8 fotos e depois trocado para as 5 do esquema novo |
+| Robustez do lote (2026-09-10) | ✅ | Lote validado ponta a ponta (T38 e SKU 45 real). Correções: `EMPTY_GTIN_REASON` condicional, título/copy/descrição sem thinking, prefill pelo `domain_discovery`, título preserva tipo de produto, placeholder "Sem marca", `PERFIL_PADRAO` universal (caminho antigo e reuso removidos), standbys `pending_raw_photos` e `pending_ai_engine` com beat, índices únicos dos slots, log `ai_cost`, `gemini-3.8-flash` fixo, fotos brutas jpg/png/webp, write-back no R2 (`asset_key`, sem blob no banco), write-back por seller removido |
 | Fase 6 | 🔲 | Frontend em produção (Vercel ou na própria VPS) + revisão humana de categoria + **tela de revisão/promoção de candidatos** |
 
 > **Railway e Vercel foram descartados para o backend.** A escolha final foi
@@ -150,7 +151,7 @@ Chaves relevantes:
 - `POSTGRES_PASSWORD`, `REDIS_PASSWORD`
 - `AI_PROVIDER` — `gemini` (padrão) ou `claude`
 - `GEMINI_API_KEY` — usado só para Gemini Flash (texto). O Imagen 4 (texto-imagem) foi removido em 2026-09-10
-- `GEMINI_MODEL` — modelo de texto (ex: `gemini-2.0-flash`)
+- `GEMINI_MODEL` — modelo de texto. **Nome explícito, nunca alias `-latest`** (hoje `gemini-3.8-flash`; ver comentário em `config.py`). Título em lote, copy dos cards e descrição rodam com `thinkingBudget: 0` e teto folgado, porque o budget zero é melhor esforço nesse modelo
 - `ANTHROPIC_API_KEY` (se usar Claude como provider)
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` — Cloudflare R2 legado (configurado mas não usado)
 - `R2_ASSET_BUCKET_NAME`, `R2_ASSET_BUCKET_ENDPOINT`, `R2_ASSET_BUCKET_ACCESS_KEY_ID`, `R2_ASSET_BUCKET_SECRET_ACCESS_KEY` — bucket R2 **dedicado** para as imagens geradas por IA (write-back na geração, `services/r2_asset_service.py`). Distinto do bucket de fotos brutas dos sellers. Vazio = a geração continua, mas as linhas nascem com `asset_key=None` e o log avisa. O banco **não guarda mais blob**: `ListingImage.asset_key` aponta para `{apelido_ml}/{sku}/{kind}-{AAAAMMDD-HHMMSS}-{4hex}.jpg` (ex.: `CAFE085/37/cover_ai-20260910-234512-ab12.jpg`), montado só em `asset_key_for()`
@@ -287,13 +288,15 @@ Nos endpoints, usa-se `Depends(get_db)` de `app.core.dependencies`.
 ### Lazy loading de relacionamentos
 Nunca passar um objeto ORM com relacionamentos lazy direto para `Model.model_validate()` — causa `MissingGreenlet`. Sempre carregar os relacionamentos com queries separadas.
 
-### Provider de IA — 4 métodos abstratos
+### Provider de IA — 3 métodos abstratos
 `AIProvider` (`ai/base.py`) declara `generate_titles`, `generate_description`
 e `generate_card_copy`. **Provider novo tem que implementar os 3** — faltar um faz a classe estourar `TypeError` na
 instanciação. Os prompts ficam centralizados em `ai/prompts.py` como
-`build_*_prompt()`; `gemini.py` e `claude.py` compartilham a mesma assinatura
-`_call(prompt, max_tokens, temperature)`, e `claude.py` reusa `_extract_json`
-de `gemini.py` em vez de duplicar.
+`build_*_prompt()`; `gemini.py` e `claude.py` compartilham a assinatura básica
+`_call(prompt, max_tokens, temperature)`; o Gemini ainda aceita `thinking` e `task`
+(log `ai_cost`) e levanta erro em `finishReason=MAX_TOKENS` em vez de devolver
+texto cortado. `claude.py` reusa `_extract_json` de `gemini.py` e **não** loga custo
+(fora de uso).
 
 ### Atributo de lista: `allowed_values` só é enumeração quando o tipo é `list`
 
@@ -383,7 +386,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order)
 - `listing_description.py` — ListingDescription
 - `listing_job.py` — ListingJob
-- `product_image.py` — ProductImage (seller_id, sku, ml_picture_id, is_approved) — índice SKU→imagem
+- `product_image.py` — ProductImage (seller_id, sku, ml_picture_id, is_approved) — índice SKU→imagem. **Sem escrita nem leitura desde 2026-09-10**; fica como registro histórico dos SKUs 37/38 até decisão de apagar
 - `batch_import.py` — BatchImport + BatchImportRow
 
 ### Arquivos de produção (raiz e backend/)
@@ -450,8 +453,10 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_allowed_values_por_tipo.py` — `values` é enumeração só em `value_type == "list"`; EAN do produto chegando ao GTIN
 - `test_ml_replace_pictures.py` — substituição TOTAL de fotos: recusa lista vazia, ID repetido e perda de `must_keep`
 
-> Suíte completa: **421 passed**. Os 2 warnings (`coroutine '_generate_images_async'
-> was never awaited`) são pré-existentes em `test_image_tasks.py`.
+> Suíte completa: **431 passed, 2 skipped** (2026-09-10). Os 2 pulados são a corrida real de
+> `test_promocao_indice_unico.py`, que só roda com `TEST_DATABASE_URL` apontando para o banco
+> local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
+> `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
 
 ### Migrations aplicadas (ordem cronológica)
 - `a7519acf4e00` — schema inicial (8 tabelas)
@@ -714,3 +719,5 @@ Esses dados devem estar no catálogo de produtos antes do pipeline de batch.
 | specs/SPEC-007-job-queue.md | Fila de jobs Celery + state machine |
 | specs/SPEC-008-frontend.md | Arquitetura do frontend |
 | specs/SPEC-009-security.md | Modelo de segurança |
+| docs/superpowers/specs/esquema-5-posicoes.md | Esquema de 5 posições (padrão único de imagens) |
+| docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md | Entrega no bucket do seller: ideia pausada e como retomar |
