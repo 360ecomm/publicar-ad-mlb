@@ -38,106 +38,30 @@ async def _resolve_requires_white_bg(listing) -> bool:
     return await category_requires_white_background(listing.ml_category_id)
 
 
-async def _append_benefit_cards(
-    db, listing, access_token: str, base_photo: bytes, source_sku: str, start_sort_order: int
-) -> int:
-    """Gera os 3 cards de texto a partir da 1a foto individual bem-sucedida.
+async def _try_i2i_generation(db, listing, seller, access_token: str) -> int | None:
+    """Gera as imagens a partir das fotos brutas reais do seller.
 
-    Devolve quantos cards subiram. Nunca levanta: qualquer falha vira log e
-    zero cards — o anúncio não pode cair por causa de um card.
+    Devolve None se o seller nao tiver SellerImageConfig ou faltar foto bruta
+    obrigatoria — o chamador poe o listing em `pending_raw_photos`. Do
+    contrario, roteia para o esquema de 5 posicoes com o perfil da categoria
+    (`profile_for_category` nunca devolve None: categoria sem perfil proprio
+    usa `PERFIL_PADRAO`).
+
+    Aqui existiu, ate 2026-09-10, um segundo caminho — individuais por foto
+    (2 variantes cada), capa composta para kit, capa deterministica
+    persistida e 3 cards Pillow — que era o destino de toda categoria sem
+    perfil e que em LOTE auto-aprovava e publicava. Removido por completo, nao
+    deixado dormente. O ramo de kit (`len(skus) > 1`) foi junto: era
+    inalcancavel, `resolve_listing_skus` sempre devolve 1 SKU.
     """
     from sqlalchemy import select
 
-    from app.models.listing_attribute import ListingAttribute
-    from app.models.listing_image import ListingImage
-    from app.services.image_benefit_card_service import render_benefit_card
-    from app.services.image_card_copy_service import generate_card_copy
-    from app.services.image_service import MLPictureService
-
-    try:
-        # Query própria: tocar `listing.attributes` (relacionamento lazy) aqui
-        # dentro levantaria MissingGreenlet — ver CLAUDE.md.
-        attributes = (
-            await db.execute(
-                select(ListingAttribute).where(ListingAttribute.listing_id == listing.id)
-            )
-        ).scalars().all()
-        cards = await generate_card_copy(listing, attributes)
-    except Exception as exc:
-        # exc_info: este log e o UNICO sinal de que os cards pararam de sair —
-        # o passo inteiro e engolido de proposito. Sem o traceback nao da pra
-        # separar falha de query, de provider ou de parse.
-        logger.warning(
-            "benefit_cards listing_id=%s sku=%s result=failed reason=%s",
-            listing.id,
-            source_sku,
-            exc,
-            exc_info=True,
-        )
-        return 0
-
-    ml_pic = MLPictureService()
-    saved = 0
-    for card in cards:
-        try:
-            card_bytes = render_benefit_card(base_photo, card.title, card.bullets)
-            # Card nunca é capa, então fundo branco puro nunca é exigido dele.
-            prepared, verdict = _prepare_image_for_upload(card_bytes, requires_white_bg=False)
-            if prepared is None:
-                logger.warning(
-                    "benefit_cards listing_id=%s sku=%s kind=%s result=rejected reason=%s",
-                    listing.id,
-                    source_sku,
-                    card.kind,
-                    verdict.reason,
-                )
-                continue
-            ml_picture_id = await ml_pic.upload(prepared, access_token)
-            db.add(ListingImage(
-                listing_id=listing.id,
-                ml_picture_id=ml_picture_id,
-                status="uploaded",
-                sort_order=start_sort_order + saved,
-                kind=card.kind,
-                source_sku=source_sku,
-            ))
-            saved += 1
-        except Exception as exc:
-            # Um card que falha não derruba os outros nem as imagens já salvas.
-            logger.warning(
-                "benefit_cards listing_id=%s sku=%s kind=%s result=failed reason=%s",
-                listing.id,
-                source_sku,
-                card.kind,
-                exc,
-                exc_info=True,
-            )
-
-    logger.info(
-        "benefit_cards listing_id=%s sku=%s requested=%s saved=%s",
-        listing.id,
-        source_sku,
-        len(cards),
-        saved,
-    )
-    return saved
-
-
-async def _try_i2i_generation(db, listing, seller, access_token: str) -> int | None:
-    """Tenta o caminho image-to-image (fotos brutas reais do seller). Retorna
-    None se o seller não tiver SellerImageConfig ou faltar alguma foto bruta
-    — nesses casos o chamador deve cair no texto-imagem existente, inalterado."""
-    from sqlalchemy import select
     from app.models.seller_image_config import SellerImageConfig
-    from app.models.listing_image import ListingImage
-    from app.models.product_image import ProductImage
+    from app.services.image_position_profiles import profile_for_category
     from app.services.seller_image_source_service import (
-        RAW_PHOTOS_MIN,
         fetch_all_raw_photos,
         resolve_listing_skus,
     )
-    from app.services.image_engines.openai_edit_engine import OpenAIEditEngine
-    from app.services.image_service import MLPictureService
 
     config = (
         await db.execute(
@@ -155,267 +79,26 @@ async def _try_i2i_generation(db, listing, seller, access_token: str) -> int | N
     if raw_photos_by_sku is None:
         return None
 
-    # ROTEAMENTO: produto unico em categoria-FOLHA com perfil cadastrado vai
-    # para o esquema de 5 posicoes. Categoria sem perfil segue o caminho
-    # antigo, inalterado — e o que mantem a mudanca contida a perfumaria
-    # enquanto as outras verticais nao forem testadas.
-    #
-    # Kits (`len(skus) > 1`) nunca entram aqui. Aquele ramo continua exatamente
-    # como estava; hoje ele e inalcancavel porque `resolve_listing_skus` sempre
-    # devolve 1 SKU, mas nao e este trabalho que muda isso.
-    from app.services.image_position_profiles import profile_for_category
+    if len(skus) != 1:
+        raise RuntimeError(
+            f"anuncio com {len(skus)} SKUs nao e suportado pelo esquema de 5 posicoes"
+        )
 
     profile = profile_for_category(listing.ml_category_id)
-    if len(skus) == 1 and profile is not None:
-        logger.info(
-            "roteamento listing_id=%s categoria=%s perfil=%s caminho=cinco_posicoes",
-            listing.id, listing.ml_category_id, profile.nome,
-        )
-        return await _gerar_cinco_posicoes(
-            db, listing, access_token, profile, raw_photos_by_sku[skus[0]], skus[0]
-        )
-
-    # A clausula CRITICAL nao e enfeite. O prompt antigo pedia "same shape,
-    # color, materials and proportions" e nao dizia nada sobre TEXTO — e o
-    # motor tratou o rotulo como textura livre para redesenhar: num teste real
-    # o frasco de 100ml saiu marcado "160ml | 3.50 fl.ex", com a marca escrita
-    # "weoink" no lugar de "wepink". Volume e marca errados na vitrine sao
-    # informacao falsa sobre o produto, nao imperfeicao estetica.
-    #
-    # Isto e MITIGACAO, nao garantia: o comportamento e do modelo, e continua
-    # estocastico. O gate de revisao humana antes da aprovacao segue sendo a
-    # protecao real. Ver a limitacao registrada no commit.
-    _NO_TEXT_EDIT_RULE = (
-        "CRITICAL: do not alter, redraw, translate, correct or re-render ANY "
-        "text printed on the product or its packaging. Brand names, product "
-        "names, volumes, measurement units, ingredient lists and any other "
-        "lettering must be preserved exactly as they appear in the reference "
-        "image, character for character. If any text is unreadable, keep it "
-        "unreadable rather than inventing plausible text. Never change a "
-        "number or a unit of measurement. "
+    logger.info(
+        "roteamento listing_id=%s categoria=%s perfil=%s caminho=cinco_posicoes",
+        listing.id, listing.ml_category_id, profile.nome,
     )
-
-    treatment_prompt = (
-        "Professional e-commerce product photo. Pure white background, "
-        "studio lighting, product centered and isolated, no text overlay, no "
-        "watermark, no people. Keep the exact product from the reference image "
-        "— same shape, color, materials and proportions. Only the background, "
-        "lighting and framing may change. "
-        + _NO_TEXT_EDIT_RULE
+    return await _gerar_cinco_posicoes(
+        db, listing, access_token, profile, raw_photos_by_sku[skus[0]], skus[0]
     )
-
-    engine = OpenAIEditEngine()
-    ml_pic = MLPictureService()
-    saved = 0
-    # Fundo branco só é exigido na capa (sort_order 0) — as demais imagens
-    # podem ter fundo contextual mesmo nas categorias com padronização rígida.
-    requires_white_bg = await _resolve_requires_white_bg(listing)
-
-    # Capa composta — só quando o anúncio tem mais de 1 SKU. Falha na
-    # composição não afeta as imagens individuais: a capa é simplesmente
-    # pulada, e a 1a imagem individual assume a posição de capa por ordem
-    # natural do array `pictures` (sort_order=0).
-    if len(skus) > 1:
-        # `[:RAW_PHOTOS_MIN]` pelo MESMO motivo do laco das individuais mais
-        # abaixo: `fetch_all_raw_photos` descobre TODAS as fotos brutas
-        # disponiveis do SKU (podem ser 10), e cada foto extra entregue ao
-        # motor de edicao e custo de IA por anuncio. O consumo continua preso
-        # ao minimo obrigatorio; descobrir mais fotos nunca pode virar gasto
-        # automatico. Hoje `resolve_listing_skus` sempre devolve 1 SKU, entao
-        # este ramo esta dormente — mas era o unico ponto sem o corte, e num
-        # anuncio de kit com 5 SKUs viraria um multiplicador silencioso.
-        all_raw_photos = [
-            photo for sku in skus for photo in raw_photos_by_sku[sku][:RAW_PHOTOS_MIN]
-        ]
-        cover_prompt = (
-            "Professional e-commerce product photo showing all the items from "
-            "the reference images together, composed in a single realistic scene. "
-            "Pure white background, studio lighting, items clearly visible and "
-            "proportionate to each other, no text overlay, no watermark, no people. "
-            + _NO_TEXT_EDIT_RULE
-        )
-        try:
-            cover_variants = await engine.edit(images=all_raw_photos, prompt=cover_prompt, n=1)
-        except Exception:
-            cover_variants = []
-
-        for img_bytes in cover_variants:
-            prepared, verdict = _prepare_image_for_upload(
-                img_bytes, requires_white_bg=requires_white_bg and saved == 0
-            )
-            if prepared is None:
-                db.add(ListingImage(
-                    listing_id=listing.id,
-                    status="validation_failed",
-                    validation_error=verdict.reason,
-                    sort_order=saved,
-                    kind="cover_composed",
-                    source_sku=None,
-                ))
-                continue
-            ml_picture_id = await ml_pic.upload(prepared, access_token)
-            db.add(ListingImage(
-                listing_id=listing.id,
-                ml_picture_id=ml_picture_id,
-                status="uploaded",
-                sort_order=saved,
-                kind="cover_composed",
-                source_sku=None,
-            ))
-            saved += 1
-
-    # Capa determinística — só para 1 SKU, e antes do loop pago. Se a foto
-    # bruta tiver fundo uniforme, a capa sai por recorte, sem custo de IA. Se
-    # não der, `saved` continua 0 e tudo segue exatamente como antes.
-    # Bytes da capa deterministica, quando ela sai e passa no QA. E a foto mais
-    # confiavel da execucao: recorte do pixel original, sem IA no meio, entao o
-    # texto impresso no produto (volume, unidade, marca) e o real.
-    cover_prepared_bytes: bytes | None = None
-
-    if len(skus) == 1:
-        from app.services.image_deterministic_service import try_deterministic_cover
-
-        only_sku = skus[0]
-        cover_bytes = try_deterministic_cover(raw_photos_by_sku[only_sku][0])
-        # Sinal binário de acerto/erro para medir a taxa real em produção sem
-        # instrumentar o serviço nem persistir nada.
-        logger.info(
-            "deterministic_cover listing_id=%s seller_id=%s sku=%s result=%s",
-            listing.id,
-            listing.seller_id,
-            only_sku,
-            "hit" if cover_bytes is not None else "miss",
-        )
-        if cover_bytes is not None:
-            prepared, verdict = _prepare_image_for_upload(
-                cover_bytes, requires_white_bg=requires_white_bg
-            )
-            if prepared is None:
-                db.add(ListingImage(
-                    listing_id=listing.id,
-                    status="validation_failed",
-                    validation_error=verdict.reason,
-                    sort_order=saved,
-                    kind="cover_deterministic",
-                    source_sku=only_sku,
-                ))
-            else:
-                ml_picture_id = await ml_pic.upload(prepared, access_token)
-                db.add(ListingImage(
-                    listing_id=listing.id,
-                    ml_picture_id=ml_picture_id,
-                    status="uploaded",
-                    sort_order=saved,
-                    kind="cover_deterministic",
-                    source_sku=only_sku,
-                    # Bytes exatos que subiram para o ML — a futura variante de
-                    # capa parte deles, nunca de uma re-derivacao. Re-derivar
-                    # seria identico enquanto a foto bruta nao mudasse, mas o
-                    # seller pode trocar a foto (aconteceu com 37-2.jpg), e ai
-                    # a variante sairia de uma imagem diferente da publicada.
-                    image_bytes=prepared,
-                ))
-                db.add(ProductImage(
-                    seller_id=listing.seller_id,
-                    sku=only_sku,
-                    ml_picture_id=ml_picture_id,
-                    source="deterministic",
-                    is_approved=False,
-                ))
-                saved += 1
-                cover_prepared_bytes = prepared
-
-    # Imagens individuais — sempre, uma chamada de edição por foto bruta.
-    first_individual_bytes: bytes | None = None
-    for sku in skus:
-        # LIMITE DELIBERADO nas 2 primeiras fotos. `fetch_raw_photos` passou a
-        # descobrir ate 10 fotos por SKU, mas isso e insumo do esquema de 5
-        # posicoes (piloto, ver docs/superpowers/specs/esquema-5-posicoes.md),
-        # NAO deste loop.
-        #
-        # Sem o corte, um seller com 5 fotos geraria 10 individuais em vez de 4:
-        # 2.5x o custo de IA, e 1 capa + 10 individuais + 3 cards = 14 imagens,
-        # acima do teto de 12 do ML. Este loop e o pipeline de producao ja
-        # testado e publicando — ele nao muda de comportamento.
-        for raw_photo in raw_photos_by_sku[sku][:RAW_PHOTOS_MIN]:
-            variants = await engine.edit(images=[raw_photo], prompt=treatment_prompt, n=2)
-            for img_bytes in variants:
-                prepared, verdict = _prepare_image_for_upload(
-                    img_bytes, requires_white_bg=requires_white_bg and saved == 0
-                )
-                if prepared is None:
-                    db.add(ListingImage(
-                        listing_id=listing.id,
-                        status="validation_failed",
-                        validation_error=verdict.reason,
-                        sort_order=saved,
-                        kind="individual",
-                        source_sku=sku,
-                    ))
-                    continue
-                ml_picture_id = await ml_pic.upload(prepared, access_token)
-
-                db.add(ListingImage(
-                    listing_id=listing.id,
-                    ml_picture_id=ml_picture_id,
-                    status="uploaded",
-                    sort_order=saved,
-                    kind="individual",
-                    source_sku=sku,
-                ))
-                db.add(ProductImage(
-                    seller_id=listing.seller_id,
-                    sku=sku,
-                    ml_picture_id=ml_picture_id,
-                    source="openai_edit",
-                    is_approved=False,
-                ))
-                saved += 1
-                if first_individual_bytes is None:
-                    first_individual_bytes = prepared
-
-    # Cards de texto — só para 1 SKU, e a base preferida é a CAPA
-    # DETERMINÍSTICA, não a primeira individual.
-    #
-    # Por que: o motor i2i altera o texto impresso no rótulo de forma
-    # estocástica. Um teste real com o SKU 37 saiu com a capa correta
-    # ("100ml | 3.38 fl.oz") e as individuais mostrando "160ml | 3.50 fl.ex",
-    # com a marca escrita "weoink". Os 3 cards herdaram o erro porque usavam a
-    # primeira individual como base — multiplicando por 3 uma imagem que
-    # ninguém tinha verificado.
-    #
-    # A capa determinística é recorte do pixel original, sem IA: o rótulo nela
-    # é sempre fiel. Ancorar os cards nela troca 3 imagens de risco
-    # probabilístico por 3 de risco zero. A individual continua como fallback
-    # para quando a capa não sai (foto bruta com fundo texturizado).
-    base_cards = cover_prepared_bytes or first_individual_bytes
-    if len(skus) == 1 and base_cards is not None:
-        logger.info(
-            "benefit_cards_base listing_id=%s sku=%s origem=%s",
-            listing.id,
-            skus[0],
-            "cover_deterministic" if cover_prepared_bytes else "individual",
-        )
-        saved += await _append_benefit_cards(
-            db,
-            listing,
-            access_token,
-            base_photo=base_cards,
-            source_sku=skus[0],
-            start_sort_order=saved,
-        )
-
-    return saved
 
 
 async def _generate_images_async(listing_id: str) -> dict:
     from sqlalchemy import select
-    from sqlalchemy.orm import defer
 
     from app.database import worker_session
     from app.models.listing import Listing
-    from app.models.listing_image import CANDIDATE_KINDS, ListingImage
-    from app.models.product_image import ProductImage
     from app.models.seller import Seller
 
     async with worker_session() as db:
@@ -450,51 +133,12 @@ async def _generate_images_async(listing_id: str) -> dict:
         if i2i_saved is not None:
             if i2i_saved == 0:
                 raise RuntimeError("Nenhuma imagem válida foi gerada pelo motor 'openai_edit'")
-            # Categoria com perfil de 5 posicoes NUNCA auto-aprova, nem em
-            # batch: revisao humana antes de publicar e obrigatoria em todas as
-            # 5 posicoes, sem excecao. Sem este guard o batch aprovaria as
-            # posicoes 2-4 (que nao sao CANDIDATE_KINDS) e publicaria um
-            # anuncio sem capa e sem ficha, porque essas duas SAO candidatas e
-            # ficariam de fora.
-            from app.services.image_position_profiles import profile_for_category
-
-            usa_cinco_posicoes = profile_for_category(listing.ml_category_id) is not None
-
-            if listing.created_via == "batch" and not usa_cinco_posicoes:
-                # `kind NOT IN CANDIDATE_KINDS`: um candidato `cover_ai` /
-                # `specs_ai` gerado sob demanda tambem esta em status
-                # "uploaded" e seria varrido por esta aprovacao em massa numa
-                # RE-execucao do pipeline — e imagem aprovada com
-                # ml_picture_id vai direto para o payload de publicacao.
-                images = (await db.execute(
-                    select(ListingImage)
-                    .options(defer(ListingImage.image_bytes))
-                    .where(
-                        ListingImage.listing_id == listing.id,
-                        ListingImage.status == "uploaded",
-                        ListingImage.kind.notin_(CANDIDATE_KINDS),
-                    )
-                )).scalars().all()
-                for img in images:
-                    # Guard redundante de proposito (a query ja filtra):
-                    # aprovar um candidato o coloca no payload de publicacao,
-                    # entao a regra vale tambem onde a escrita acontece.
-                    if img.kind in CANDIDATE_KINDS:
-                        continue
-                    img.approved = True
-                prod_imgs = (await db.execute(
-                    select(ProductImage).where(
-                        ProductImage.seller_id == listing.seller_id,
-                        ProductImage.sku == sku,
-                    )
-                )).scalars().all()
-                for pi in prod_imgs:
-                    pi.is_approved = True
-                listing.status = "generating_description"
-                await db.commit()
-            else:
-                listing.status = "pending_image_approval"
-                await db.commit()
+            # Revisao humana SEMPRE, em qualquer categoria e tambem em lote:
+            # todas as posicoes nascem approved=False e o anuncio para aqui.
+            # A auto-aprovacao em lote que existia para o caminho antigo
+            # (individuais + cards) saiu com ele em 2026-09-10.
+            listing.status = "pending_image_approval"
+            await db.commit()
             return {"listing_id": listing_id, "images_saved": i2i_saved, "source": "i2i"}
 
         # Sem foto bruta no bucket: STANDBY, nunca fallback. Aqui existia o
@@ -579,7 +223,7 @@ async def _tentar(descricao: str, listing_id, fabrica, tentativas: int = _TENTAT
     """Roda `fabrica()` ate `tentativas` vezes; devolve None se todas falharem.
 
     Cada posicao e independente: uma que falha nao pode derrubar as outras nem
-    o anuncio — mesmo padrao ja usado em `_append_benefit_cards`. O retry
+    o anuncio — mesmo padrao dos antigos cards Pillow. O retry
     existe porque a falha tipica do motor e transiente (timeout, 5xx), e
     perder uma posicao inteira por isso seria caro.
     """
