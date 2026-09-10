@@ -436,38 +436,13 @@ async def _generate_images_async(listing_id: str) -> dict:
 
         sku = listing.sku_external_id or ""
 
-        # Verifica se já existem imagens aprovadas para este SKU neste seller
-        if sku:
-            existing = (
-                await db.execute(
-                    select(ProductImage)
-                    .where(
-                        ProductImage.seller_id == listing.seller_id,
-                        ProductImage.sku == sku,
-                        ProductImage.is_approved == True,
-                    )
-                    .order_by(ProductImage.created_at.asc())
-                )
-            ).scalars().all()
-
-            if existing:
-                for i, pi in enumerate(existing):
-                    db.add(ListingImage(
-                        listing_id=listing.id,
-                        ml_picture_id=pi.ml_picture_id,
-                        status="uploaded",
-                        approved=True,
-                        sort_order=i,
-                    ))
-                if listing.created_via == "batch":
-                    listing.status = "generating_description"
-                    await db.commit()
-                else:
-                    listing.status = "pending_image_approval"
-                    await db.commit()
-                return {"listing_id": listing_id, "images_reused": len(existing)}
-
-        # Sem imagens existentes — gera com IA
+        # Aqui existia um atalho: se o (seller, sku) ja tivesse `ProductImage`
+        # aprovada de outro anuncio, os `ml_picture_id` eram copiados para
+        # este listing, marcados `approved=True`, e o lote pulava direto para
+        # `generating_description` — sem gerar nada, sem o esquema de 5
+        # posicoes e sem o guard de revisao humana. Removido em 2026-09-10:
+        # todo listing SEMPRE gera as suas imagens. O indice SKU→imagem
+        # (`ProductImage`) continua sendo escrito, como registro, nao atalho.
         from datetime import datetime, timezone
         from app.services.image_engines.base import ImageEngineUnavailableError
         from app.services.image_engines.openai_engine import check_openai_health

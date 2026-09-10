@@ -430,7 +430,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 ### backend/app/workers/tasks/
 - `ai_tasks.py` — `generate_title`, `generate_description`
 - `category_tasks.py` — `predict_category` (batch: atomic UPDATE + Celery chain se sem attrs pendentes)
-- `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; reutiliza imagens via ProductImage; `ensure_dimensions` antes do upload) + `_append_benefit_cards` (3 cards depois das individuais; só para 1 SKU e só se ao menos 1 individual foi salva; nunca levanta — falha vira log e zero cards)
+- `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; `ensure_dimensions` antes do upload) + `_append_benefit_cards` (3 cards depois das individuais; só para 1 SKU e só se ao menos 1 individual foi salva; nunca levanta — falha vira log e zero cards)
 - `publish_tasks.py` — `publish_listing` (MLValidationError → failed sem retry)
 - `batch_tasks.py` — `process_batch` (lê planilha, cria listings, dispara pipeline)
 
@@ -552,12 +552,15 @@ não aceita texto/infográfico na capa, só da 2ª imagem em diante.
 O ramo de **kit** (`len(skus) > 1`) segue inalterado e é hoje **inalcançável**:
 `resolve_listing_skus` sempre devolve 1 SKU.
 
-> **Gap conhecido:** cards **não** gravam linha em `ProductImage`, porque a copy
-> é derivada do `selected_title` e dos atributos *daquele* anúncio — reusar em
-> outro anúncio do mesmo SKU publicaria texto errado. Consequência: um segundo
-> anúncio do mesmo SKU que caia no caminho de reuso por `ProductImage` recebe
-> as fotos reusadas e **nenhum card**. É o comportamento padrão para SKU
-> repetido, não um caso raro. Decisão de produto em aberto.
+> **Não existe mais reuso de imagem entre anúncios do mesmo SKU** (removido em
+> 2026-09-10). Antes, `_generate_images_async` copiava os `ml_picture_id` de
+> `ProductImage.is_approved` para o listing novo, aprovava tudo e, em lote,
+> pulava direto para `generating_description` — sem as 5 posições, sem cards
+> e sem o guard de revisão. Hoje todo listing **sempre gera** as suas imagens.
+> `ProductImage` continua sendo escrito (registro SKU→imagem), mas nenhum
+> caminho o lê para pular geração; `tests/test_sem_reuso_de_imagem.py` trava
+> isso. Cards continuam sem linha em `ProductImage`, porque a copy é derivada
+> do `selected_title` e dos atributos *daquele* anúncio.
 
 ---
 

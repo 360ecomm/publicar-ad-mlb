@@ -641,7 +641,7 @@ class TestBatchApprovalNeverApprovesCandidates:
 
         listing = MagicMock()
         listing.status = "generating_images"
-        listing.sku_external_id = None  # pula o reuso por ProductImage
+        listing.sku_external_id = None
         listing.seller_id = "sid"
         listing.created_via = "batch"
 
