@@ -1,7 +1,7 @@
 """Frente B: ficha tecnica renderizada por IA, gerada sob demanda.
 
 Nada aqui roda automaticamente — o pipeline batch/manual continua produzindo
-o `card_specs` por `_append_benefit_cards` (composicao Pillow, sem custo de
+o `card_specs` pelo antigo renderizador Pillow (removido em 2026-09-10, sem custo de
 IA) exatamente como hoje. Este servico so e acionado quando um humano chama
 o endpoint dedicado; o resultado e um CANDIDATO para comparacao A/B com o
 `card_specs` ja existente, nunca uma substituicao automatica.
@@ -157,7 +157,7 @@ async def generate_specs_variant(db, listing, access_token: str) -> ListingImage
     generated_bytes = variants[0]
 
     # Ficha tecnica nunca e capa, entao fundo branco puro nunca e exigido dela
-    # — mesma regra ja aplicada aos cards Pillow em `_append_benefit_cards`.
+    # — mesma regra dos antigos cards Pillow.
     prepared, verdict = _prepare_image_for_upload(generated_bytes, requires_white_bg=False)
 
     if prepared is None:

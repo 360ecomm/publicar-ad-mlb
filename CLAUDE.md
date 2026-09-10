@@ -391,9 +391,6 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `backend/.dockerignore` — exclui `.env` explicitamente, como rede de segurança caso o build context mude de `./backend` para `.`
 - `backend/pytest.ini` — `cache_dir = /tmp/pytest_cache`: `/app` pertence ao root e o processo roda como `appuser`. Dar `chown` em `/app` deixaria o código gravável pelo usuário de runtime, anulando metade do ganho do non-root
 
-### backend/app/assets/fonts/
-- `Inter-Regular.ttf` (peso 400), `Inter-Bold.ttf` (peso 700), `OFL.txt` — fonte do renderizador de cards. Versionadas no repo de propósito: a imagem `python:3.12-slim` **não traz nenhuma TTF** e o Pillow só embarca fonte bitmap, então sem isso `ImageFont.truetype()` não tem o que carregar. Licença SIL OFL, uso comercial livre.
-
 ### backend/app/services/
 - `auth_service.py` — login, refresh token
 - `ml_oauth_service.py` — OAuth ML, troca code→token, refresh token ML
@@ -405,17 +402,10 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `product_service.py` — ProductService (multi-tenant via `_base_query()`): list, get, create, update, upsert
 - `product_import_service.py` — parser CSV/XLSX de produtos (auto-detect delimitador)
 - `batch_import_service.py` — parser CSV/XLSX de anúncios (auto-detect delimitador)
-- `image_card_copy_service.py` — copy dos cards via LLM: `CARD_KINDS`, `CardCopy`, `generate_card_copy()`. **Nunca levanta exceção** — devolve `[]` em falha e descarta ângulo inutilizável. Sanitiza sem confiar no LLM: trunca título em 40 e bullets em 50 chars, exige 2–3 bullets, e roda uma **denylist de conteúdo proibido pelo ML** (preço, URL, telefone, frete grátis, superlativo) no texto **cru, antes de truncar** — truncar o preço para fora não pode servir de lavagem
-> **Base dos cards é a CAPA DETERMINÍSTICA**, com fallback para a 1ª
-> individual. A capa é recorte do pixel original, sem IA: o rótulo nela é
-> sempre fiel. Ancorar os cards nela troca 3 imagens de risco probabilístico
-> por 3 de risco zero — antes, os 3 cards herdavam o rótulo corrompido de uma
-> imagem de IA que ninguém tinha verificado.
-
-- `image_benefit_card_service.py` — renderizador Pillow: `render_benefit_card()` → JPEG 1200×1200, `CardRenderError`. Foto em contain-fit na faixa y=0..640, bloco de texto centralizado em y=700..1110 com clamp que impede desenho fora do canvas (descarta o último bullet se não couber)
+- `image_card_copy_service.py` — copy via LLM (`generate_card_copy()`, só `card_benefits` é consumido hoje, pela posição 2) e `build_specs_card()` (bullets determinísticos da posição 4). **Nunca levanta exceção** — devolve `[]` em falha e descarta ângulo inutilizável. Sanitiza sem confiar no LLM: trunca título em 40 e bullets em 50 chars, exige 2–3 bullets, e roda uma **denylist de conteúdo proibido pelo ML** (preço, URL, telefone, frete grátis, superlativo) no texto **cru, antes de truncar** — truncar o preço para fora não pode servir de lavagem
 - `cover_variant_service.py` — Frente A: `generate_cover_variant()` (candidato `cover_ai`), `promote_cover()`, `_load_latest_deterministic_cover()`. `_pick_prompt()` devolve **sempre** o prompt leve — capa branca em toda categoria. `_COVER_PROMPT_RICH` fica no módulo **dormant**, para o toggle por seller no frontend; há teste que falha se alguém apagá-lo
 - `specs_variant_service.py` — Frente B: `generate_specs_variant()` (candidato `specs_ai`), `promote_specs()`, `_build_specs_prompt()`. O prompt **não tem título**: a ficha sai só com bullets, e proíbe cabeçalho explicitamente — omitir sem proibir convida o motor a inventar um
-- `image_position_profiles.py` — tabela `{categoria_folha: PositionProfile}` do esquema de 5 posições. Carrega canvas **e** conteúdo, então um perfil novo (Moda em 4:5) é uma linha a mais. `detail_caption_for()` deriva a legenda do SKU, não sorteia: regerar não pode trocar a legenda por baixo de uma revisão já feita
+- `image_position_profiles.py` — `PERFIL_PADRAO` (genérico, fallback universal) + tabela `{categoria_folha: PositionProfile}` de perfis lapidados por vertical. Carrega canvas **e** conteúdo, então um perfil novo (Moda em 4:5) é uma linha a mais. `detail_caption_for()` deriva a legenda do SKU, não sorteia: regerar não pode trocar a legenda por baixo de uma revisão já feita
 - `image_position_prompts.py` — prompts das posições 2, 3 e 4. Cláusula `CRITICAL` **idêntica** nas três, palavra por palavra
 
 > **`build_specs_card` continua devolvendo `title`.** A remoção do cabeçalho
@@ -430,7 +420,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `ai_tasks.py` — `generate_title`, `generate_description`
 - `category_tasks.py` — `predict_category` (batch: atomic UPDATE + Celery chain se sem attrs pendentes)
 - `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; sem foto bruta no bucket → `pending_raw_photos`, nunca fallback; `ensure_dimensions` antes do upload)
-- `raw_photo_tasks.py` — `check_pending_raw_photos`: **única tarefa do celery_beat** (a cada 15 min), retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + mesma chain do lote) + `_append_benefit_cards` (3 cards depois das individuais; só para 1 SKU e só se ao menos 1 individual foi salva; nunca levanta — falha vira log e zero cards)
+- `raw_photo_tasks.py` — `check_pending_raw_photos`: **única tarefa do celery_beat** (a cada 15 min), retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + mesma chain do lote) 
 - `publish_tasks.py` — `publish_listing` (MLValidationError → failed sem retry)
 - `batch_tasks.py` — `process_batch` (lê planilha, cria listings, dispara pipeline)
 
@@ -448,8 +438,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_image_tasks.py` — `TestMarkFailed` (4), `TestGenerateImagesRateLimit` (2), `TestFetchUploadToken` (2), `TestGenerateImagesIdempotency` (2)
 - `test_batch_chain.py` — `TestCategoryTaskChainDispatch` (3), `TestSubmitAttributesChainDispatch` (1), `TestRemovedInternalDispatch` (2)
 - `test_image_card_copy_service.py` — saneamento da copy, denylist de conteúdo (true positives + **13 casos de falso positivo**: `12V`, `3,5cm`, `500ml`, `12,50 m`, `99,9%`, `5000mAh`…)
-- `test_image_benefit_card_service.py` — geometria do card. Os testes de layout aferem a geometria **calculada de forma independente** das constantes, mais um caso pixel-level que garante que nada é desenhado abaixo de y=1112
-- `test_image_tasks_i2i.py` — `TestBenefitCardsIntegration`: ordem dos 3 cards, `sort_order` contíguo, falha de 1 card não derruba os outros, nenhum card sem individual salva, kit não gera card
+- `test_perfil_padrao.py` — `PERFIL_PADRAO` para categoria sem perfil próprio, nunca None, roteamento para as 5 posições, nunca auto-aprova em lote
 - `test_ml_oauth_state.py` — state do OAuth no Redis (incluindo o cenário "inicia num worker, completa em outro") e destino pós-callback com/sem `FRONTEND_URL`
 - `test_cover_variant.py` / `test_cover_promote.py` — Frente A: capa sempre branca, prompt rico dormant, candidato reprovado guarda os bytes, promoção idempotente e autocurável
 - `test_specs_variant.py` / `test_specs_promote.py` — Frente B: ficha sem título, promoção lendo o slot da galeria em vez de cravar número
@@ -500,12 +489,14 @@ MLValidationError (400 do ML) ──► failed (sem retry automático)
 
 ## Ordem das imagens do anúncio
 
-Há **dois caminhos**, escolhidos por categoria em `_try_i2i_generation`.
-
-### Caminho novo — esquema de 5 posições (produto único, categoria com perfil)
-
-Vale quando `profile_for_category(listing.ml_category_id)` acha um perfil em
-`image_position_profiles.py`. Hoje: só **MLB6284**.
+**Um único caminho desde 2026-09-10: o esquema de 5 posições, em toda
+categoria.** `profile_for_category` nunca devolve None: categoria com perfil
+próprio (hoje só **MLB6284** → Perfumaria) usa o dela; qualquer outra usa
+`PERFIL_PADRAO` (mesmo canvas 1200×1200, legendas de detalhe neutras). O
+caminho antigo — individuais por foto, capa composta de kit, capa
+determinística persistida, 3 cards Pillow e a **auto-aprovação em lote** —
+foi removido por completo, não deixado dormente. Sem foto bruta no bucket, o
+listing vai para `pending_raw_photos` (ver `raw_photo_standby_service`).
 
 | # | `kind` | Origem | Entrada |
 |---|---|---|---|
@@ -515,55 +506,32 @@ Vale quando `profile_for_category(listing.ml_category_id)` acha um perfil em
 | 3 | `detail_ai` | IA, legenda fixa do perfil | `pick_detail_source()` (3ª foto se existir) |
 | 4 | `specs_ai` | IA, bullets do `value_name` real | capa determinística |
 
-Canvas **1200×1200**, vindo de `PositionProfile.canvas` — não de constante do
-worker. Cada posição é independente, com 2 tentativas; falha em uma não derruba
-as outras. A capa determinística é calculada mas **não vira linha visível**: só
+Canvas vem de `PositionProfile.canvas` — não de constante do worker. Cada
+posição é independente, com 2 tentativas; falha em uma não derruba as
+outras. A capa determinística é calculada mas **não vira linha visível**: só
 é persistida se a posição 0 por IA falhar por completo.
 
-**Todas nascem `approved=False`, e categoria com perfil nunca auto-aprova nem
-em batch.** Sem esse guard o batch aprovaria as posições 1–3 e publicaria um
-anúncio **sem capa e sem ficha**, porque essas duas são `CANDIDATE_KINDS` e
-ficariam de fora da varredura.
+**Todas nascem `approved=False`, em qualquer categoria, também em lote.** O
+listing para em `pending_image_approval` e a chain de lote morre nos guards
+das tasks seguintes. Não existe mais nenhum caminho que publique sem revisão
+humana das imagens.
 
 > **Vertical seria destrutivo aqui.** `normalize_to_square` **recorta o
 > centro**, não adiciona borda: um canvas 3:4 perderia o painel de texto das
 > posições 1–3 — o texto que justifica a existência delas — e **ainda passaria
 > no QA**, porque `validate_image` não exige quadrado. O ML recomenda 1200×1200
-> para Beleza e Cuidado Pessoal; o 4:5 é recomendação de Moda/Vestuário.
+> para a maioria das categorias; o 4:5 é recomendação de Moda/Vestuário, e
+> entraria como perfil próprio.
 
 Perfil é chaveado pela **categoria-folha, nunca pela raiz**: a raiz de MLB6284
 é MLB1246 (Beleza), com 13 filhas — chavear nela aplicaria "Frasco elegante" a
-esmalte e álcool em gel. Categoria sem perfil **cai no caminho antigo** e não
-herda o da irmã nem o da raiz.
+esmalte e álcool em gel. Categoria sem perfil próprio **não herda o da irmã
+nem o da raiz**: recebe o genérico.
 
-### Caminho antigo — demais categorias, e kits
-
-| # | `kind` | Origem |
-|---|---|---|
-| 0 | `cover_deterministic` | recorte por distância de cor, sem custo de IA — só quando a foto bruta tem fundo uniforme |
-| 1..n | `individual` | edição i2i da foto bruta do seller (2 variantes por foto, limitado a `[:RAW_PHOTOS_MIN]`) |
-| n+1 | `card_benefits` | Pillow + copy LLM |
-| n+2 | `card_usage` | Pillow + copy LLM |
-| n+3 | `card_specs` | Pillow + bullets determinísticos do atributo |
-
-Se a capa determinística falhar, tudo desloca uma posição para trás e a 1ª
-individual assume o `sort_order` 0. **Cards nunca ocupam a posição 0** — o ML
-não aceita texto/infográfico na capa, só da 2ª imagem em diante.
-
-O ramo de **kit** (`len(skus) > 1`) segue inalterado e é hoje **inalcançável**:
-`resolve_listing_skus` sempre devolve 1 SKU.
-
-> **Não existe mais reuso de imagem entre anúncios do mesmo SKU** (removido em
-> 2026-09-10). Antes, `_generate_images_async` copiava os `ml_picture_id` de
-> `ProductImage.is_approved` para o listing novo, aprovava tudo e, em lote,
-> pulava direto para `generating_description` — sem as 5 posições, sem cards
-> e sem o guard de revisão. Hoje todo listing **sempre gera** as suas imagens.
-> `ProductImage` continua sendo escrito (registro SKU→imagem), mas nenhum
-> caminho o lê para pular geração; `tests/test_sem_reuso_de_imagem.py` trava
-> isso. Cards continuam sem linha em `ProductImage`, porque a copy é derivada
-> do `selected_title` e dos atributos *daquele* anúncio.
-
----
+> **`ProductImage` (índice SKU→imagem) não recebe mais linhas.** Nenhum
+> caminho o lê nem o escreve desde a remoção do reuso e do caminho antigo. A
+> tabela e o model ficam como registro histórico dos SKUs 37/38 até decisão
+> explícita de apagar.
 
 ## Endpoints implementados
 

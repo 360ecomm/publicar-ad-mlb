@@ -361,19 +361,10 @@ class ListingService:
                 img.approved = False
                 img.status = "rejected"
 
-        # Marca as imagens aprovadas no índice SKU→imagem
-        if approved_ml_ids and listing.sku_external_id:
-            from app.models.product_image import ProductImage
-            from sqlalchemy import update as sa_update
-            await self.db.execute(
-                sa_update(ProductImage)
-                .where(
-                    ProductImage.seller_id == listing.seller_id,
-                    ProductImage.sku == listing.sku_external_id,
-                    ProductImage.ml_picture_id.in_(approved_ml_ids),
-                )
-                .values(is_approved=True)
-            )
+        # O indice SKU→imagem (`ProductImage`) nao recebe mais linhas desde a
+        # remocao do caminho antigo (2026-09-10) — nenhum caminho o le nem o
+        # escreve. A tabela e o model ficam como registro historico dos SKUs
+        # 37/38 ate decisao explicita de apagar.
 
         listing.status = "generating_description"
         await self.db.commit()

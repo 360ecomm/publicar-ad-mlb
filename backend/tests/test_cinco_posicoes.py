@@ -274,31 +274,33 @@ class TestPerfilPorFolha:
 
         assert profile_for_category("MLB6284") is not None
 
-    def test_categoria_irma_nao_herda(self):
+    def test_categoria_irma_nao_herda_o_perfil_de_perfumaria(self):
         """Maquiagem e Cuidados com o Cabelo sao irmas de Perfumes sob a mesma
-        raiz. Herdar aplicaria "Frasco elegante" a esmalte."""
-        from app.services.image_position_profiles import profile_for_category
+        raiz. Herdar aplicaria "Frasco elegante" a esmalte: elas recebem o
+        generico, nao o de perfumaria."""
+        from app.services.image_position_profiles import PERFIL_PADRAO, profile_for_category
 
         for irma in ("MLB1248", "MLB1263", "MLB198312"):
-            assert profile_for_category(irma) is None
+            assert profile_for_category(irma) is PERFIL_PADRAO
 
-    def test_raiz_nao_tem_perfil(self):
-        from app.services.image_position_profiles import profile_for_category
+    def test_raiz_recebe_o_generico(self):
+        from app.services.image_position_profiles import PERFIL_PADRAO, profile_for_category
 
-        assert profile_for_category("MLB1246") is None
+        assert profile_for_category("MLB1246") is PERFIL_PADRAO
 
     def test_perfume_pet_nao_esta_cadastrado(self):
         """MLB178938 e perfume para caes, com vocabulario proprio e nenhum SKU
-        testado — e a origem do caso "Colonia" do CLAUDE.md."""
-        from app.services.image_position_profiles import profile_for_category
+        testado — e a origem do caso "Colonia" do CLAUDE.md. Sem perfil
+        proprio, cai no generico."""
+        from app.services.image_position_profiles import PERFIL_PADRAO, profile_for_category
 
-        assert profile_for_category("MLB178938") is None
+        assert profile_for_category("MLB178938") is PERFIL_PADRAO
 
-    def test_categoria_nula_ou_vazia(self):
-        from app.services.image_position_profiles import profile_for_category
+    def test_categoria_nula_ou_vazia_nunca_e_none(self):
+        from app.services.image_position_profiles import PERFIL_PADRAO, profile_for_category
 
-        assert profile_for_category(None) is None
-        assert profile_for_category("") is None
+        assert profile_for_category(None) is PERFIL_PADRAO
+        assert profile_for_category("") is PERFIL_PADRAO
 
     def test_legenda_de_detalhe_e_estavel_por_sku(self):
         """Regerar as imagens nao pode trocar a legenda por baixo de uma
