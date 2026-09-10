@@ -120,13 +120,26 @@ class CategoryService:
         seller = result.scalar_one()
         token = await get_valid_access_token(seller, self.db)
 
-        category_id = await self._predict_category(listing.selected_title, token)
+        found = await self._discover(listing.selected_title, token)
+        category_id = found["category_id"]
         listing.ml_category_id = category_id
 
         raw_attrs = await self._get_attributes(category_id, token)
-        await self._save_attributes(listing, raw_attrs, ean=ean)
+        # O candidato traz `attributes` previstos a partir do texto (BRAND,
+        # PERFUME_NAME, UNIT_VOLUME, GENDER...). Fonte ADICIONAL de prefill:
+        # quem decide o que entra e' `_save_attributes`, com o tipo real da
+        # categoria em maos.
+        await self._save_attributes(
+            listing, raw_attrs, ean=ean, discovered=found.get("attributes") or []
+        )
 
-    async def _predict_category(self, title: str, token: str) -> str:
+    async def _discover(self, title: str, token: str) -> dict:
+        """Primeiro candidato do `domain_discovery`, inteiro.
+
+        Alem de `category_id`, o candidato traz `attributes`: lista de
+        `{id, name, value_id, value_name}` previstos a partir do texto. Nao
+        traz `value_type` — o tipo vem de `_get_attributes`.
+        """
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 f"{_ML_API}/sites/MLB/domain_discovery/search",
@@ -137,7 +150,10 @@ class CategoryService:
         results = resp.json()
         if not results:
             raise ValueError(f"Nenhuma categoria ML encontrada para: {title!r}")
-        return results[0]["category_id"]
+        return results[0]
+
+    async def _predict_category(self, title: str, token: str) -> str:
+        return (await self._discover(title, token))["category_id"]
 
     async def _get_attributes(self, category_id: str, token: str) -> list[dict]:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -148,7 +164,13 @@ class CategoryService:
         resp.raise_for_status()
         return resp.json()
 
-    async def _save_attributes(self, listing: Listing, raw_attrs: list[dict], ean: str | None = None) -> None:
+    async def _save_attributes(
+        self,
+        listing: Listing,
+        raw_attrs: list[dict],
+        ean: str | None = None,
+        discovered: list[dict] | None = None,
+    ) -> None:
         # Remove atributos de tentativas anteriores — garante idempotência em retries
         await self.db.execute(
             delete(ListingAttribute).where(ListingAttribute.listing_id == listing.id)
@@ -198,6 +220,14 @@ class CategoryService:
         # proprio ML nao pediria, e em lote nenhum SKU chegava as imagens.
         gtin_preenchido = bool(prefill.get("GTIN"))
 
+        # Atributos previstos pelo `domain_discovery` a partir do titulo.
+        # Fonte ADICIONAL: so preenche o que o prefill acima deixou vazio, e
+        # nunca cria atributo que a categoria real nao tenha. O que pode
+        # entrar depende do tipo real (abaixo, no laco).
+        sugeridos: dict[str, dict] = {
+            a["id"]: a for a in (discovered or []) if a.get("id") and a.get("value_name")
+        }
+
         for attr in raw_attrs:
             attr_id: str = attr["id"]
             tags = attr.get("tags", {})
@@ -210,6 +240,36 @@ class CategoryService:
 
             value_name: str | None = prefill.get(attr_id)
             value_id: str | None = None
+            origem = "seller" if value_name else "ai"
+
+            if not value_name and attr_id in sugeridos:
+                sugerido = sugeridos[attr_id]
+                if allowed and attr_type in ("list", "boolean"):
+                    # Enumeracao: entra SO se o id previsto existir na lista da
+                    # categoria real — validacao pelo ID, nao pelo nome. O
+                    # discovery preve PERFUME_TYPE 'Body splash' com um id que
+                    # MLB6284 nao conhece; gravar isso e' 400 na publicacao.
+                    casado = next((v for v in allowed if v["id"] == sugerido.get("value_id")), None)
+                    if casado is not None:
+                        value_id, value_name, origem = casado["id"], casado["name"], "discovery"
+                    else:
+                        logger.warning(
+                            "discovery_descartado attribute_id=%s valor=%r value_id=%r categoria=%s "
+                            "motivo=id_fora_dos_allowed_values",
+                            attr_id, sugerido.get("value_name"), sugerido.get("value_id"),
+                            listing.ml_category_id,
+                        )
+                else:
+                    # Texto livre (string, number_unit): so o nome, sem id, e o
+                    # ML resolve — o mesmo tratamento de BRAND/MODEL, e o mesmo
+                    # que publicou o SKU 38 (PERFUME_NAME e UNIT_VOLUME foram
+                    # ao ar so com value_name).
+                    value_name, origem = sugerido["value_name"], "discovery"
+                # Ja resolvido (ou descartado) pelo tipo real: o casamento por
+                # nome abaixo e' so para o prefill vindo do produto.
+                allowed_para_casar = None
+            else:
+                allowed_para_casar = allowed
 
             # `values` significa coisas diferentes conforme o `value_type`:
             #
@@ -228,9 +288,9 @@ class CategoryService:
 
             # Tenta casar value_id na lista — vale para os dois tipos: quando
             # casa, aproveitamos o id e o nome exato do ML.
-            if value_name and allowed:
+            if value_name and allowed_para_casar:
                 casou = False
-                for v in allowed:
+                for v in allowed_para_casar:
                     if v["name"].lower() == value_name.lower():
                         value_id = v["id"]
                         value_name = v["name"]
@@ -256,7 +316,7 @@ class CategoryService:
                         attr_id,
                         value_name,
                         listing.ml_category_id,
-                        [v.get("name") for v in allowed][:10],
+                        [v.get("name") for v in allowed_para_casar][:10],
                     )
                     value_name = None
                     value_id = None
@@ -283,7 +343,7 @@ class CategoryService:
                 is_required=is_required,
                 value_id=value_id,
                 value_name=value_name,
-                source="seller" if attr_id in prefill and prefill.get(attr_id) else "ai",
+                source=origem,
                 allowed_values=allowed,
             ))
 
