@@ -351,7 +351,7 @@ class TestCoverLookupWithDuplicateCovers:
     @pytest.mark.asyncio
     async def test_two_deterministic_covers_do_not_raise_multiple_results_found(self):
         """Alcançável pelo fluxo normal: retry_pipeline → submit_attributes →
-        POST /pipeline/generate_images (ou confirm_image_engine('retry_openai'))
+        POST /pipeline/generate_images (ou a retomada de pending_raw_photos)
         roda `_try_i2i_generation` de novo e insere a 2ª capa."""
         from app.services.cover_variant_service import generate_cover_variant
 

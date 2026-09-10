@@ -11,12 +11,11 @@ from app.models.listing_description import ListingDescription
 from app.models.product_image import ProductImage
 from app.models.batch_import import BatchImport, BatchImportRow
 from app.models.seller_title_config import SellerTitleConfig  # noqa: F401
-from app.models.image_engine_state import ImageEngineState
 from app.models.seller_image_config import SellerImageConfig
 
 __all__ = [
     "Seller", "User", "UserSellerAccess", "Product", "Listing", "ListingJob",
     "ListingTitle", "ListingAttribute", "ListingImage", "ListingDescription",
     "ProductImage", "BatchImport", "BatchImportRow", "SellerTitleConfig",
-    "ImageEngineState", "SellerImageConfig",
+    "SellerImageConfig",
 ]

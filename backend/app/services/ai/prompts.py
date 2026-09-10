@@ -128,35 +128,6 @@ Responda EXCLUSIVAMENTE em JSON válido, sem markdown, sem ```json:
 {{"titles": [{{"title": "título aqui", "score": 9.2, "rationale": "motivo breve"}}, {{"title": "título aqui", "score": 8.7, "rationale": "motivo breve"}}, {{"title": "título aqui", "score": 8.1, "rationale": "motivo breve"}}]}}"""
 
 
-# ── Image prompt ───────────────────────────────────────────────────────────────
-
-def build_image_prompt_request(brand: str, title: str, description: str) -> str:
-    return f"""You are an expert prompt engineer for Google Imagen 4 AI image generation.
-
-Write a concise English prompt (max 80 words) to generate a professional e-commerce product photo suitable for Mercado Livre listings.
-
-MANDATORY rules for the prompt you write:
-- Describe ONLY the physical product: exact shape, material, color, size, key visual features
-- The product must be ISOLATED on a pure white (#FFFFFF) background with neutral studio lighting
-- The product must occupy at least 80% of the frame, centered
-- Image must be square (1:1), minimum 1024×1024 pixels equivalent
-- Start with the product type in English (e.g. "ball bearing", "spiral notebook", "power drill")
-- NO people, hands, clothing, text, watermarks, logos, backgrounds, shadows, props or scene elements
-
-WHAT MUST NEVER APPEAR (these cause listing rejection on Mercado Livre):
-- Any element that is NOT the product itself
-- Lifestyle scenes, nature, furniture, rooms
-- Graphic overlays, price tags, promotional banners
-- Multiple products unless it is a kit/set
-
-Product:
-Brand: {brand}
-Title: {title}
-Description: {description}
-
-Output ONLY the Imagen prompt. No explanations, no markdown, no quotes."""
-
-
 # ── Description prompt ─────────────────────────────────────────────────────────
 
 def build_description_prompt(listing_data: dict) -> str:

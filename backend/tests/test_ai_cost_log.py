@@ -165,19 +165,6 @@ class TestOpenAILogaCusto:
         assert c["listing_id"] == "lid-2" and c["sku"] == "T38"
 
     @pytest.mark.asyncio
-    async def test_generate(self, caplog):
-        from app.services.image_engines.openai_engine import OpenAIImageEngine
-        caplog.set_level(logging.INFO, logger="ai_cost")
-        mock_post = AsyncMock(return_value=_resposta_openai(_USAGE_IMG))
-
-        with patch("httpx.AsyncClient") as cls:
-            cls.return_value.__aenter__.return_value.post = mock_post
-            await OpenAIImageEngine().generate("p")
-
-        (c,) = _registros(caplog)
-        assert c["task"] == "image_generate" and c["images"] == "1" and c["output_tokens"] == "1056"
-
-    @pytest.mark.asyncio
     async def test_sem_usage_na_resposta_loga_mesmo_assim(self, caplog):
         """Modelo antigo sem `usage`: a linha sai com as unidades que existem
         (imagens, tamanho) e tokens vazios — melhor que nenhuma linha."""
@@ -237,25 +224,11 @@ class TestWorkersFixamContexto:
         listing = MagicMock()
         listing.id = "lid-8"; listing.sku_external_id = ""; listing.status = "generating_images"
         listing.seller_id = "sid"; listing.created_via = "manual"
-        n = [0]
 
-        async def execute(stmt):
-            n[0] += 1
-            r = MagicMock()
-            r.scalar_one = MagicMock(return_value=listing if n[0] == 1 else MagicMock(current_engine="openai"))
-            return r
-
-        db = AsyncMock(); db.execute = execute; db.commit = AsyncMock()
-        with patch("app.database.worker_session", lambda: _sessao(db)), \
-             patch("app.workers.tasks.image_tasks._fetch_upload_token", new_callable=AsyncMock, return_value="tok"), \
-             patch("app.workers.tasks.image_tasks._try_i2i_generation", new_callable=AsyncMock, return_value=None), \
-             patch("app.services.ai.service.get_ai_provider",
-                   return_value=AsyncMock(generate_image_prompt=AsyncMock(return_value="prompt"))), \
-             patch("app.services.image_engines.openai_engine.OpenAIImageEngine") as cls:
-            cls.return_value.generate = AsyncMock(return_value=[])
-            try:
-                await _generate_images_async("lid-8")
-            except Exception:
-                pass  # pode falhar depois do ponto que interessa
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock(scalar_one=MagicMock(return_value=listing)))
+        db.commit = AsyncMock()
+        with patch("app.database.worker_session", lambda: _sessao(db)),              patch("app.workers.tasks.image_tasks._fetch_upload_token", new_callable=AsyncMock, return_value="tok"),              patch("app.workers.tasks.image_tasks._try_i2i_generation", new_callable=AsyncMock, return_value=None):
+            await _generate_images_async("lid-8")
 
         assert cost_context() == {"listing_id": "lid-8", "sku": ""}

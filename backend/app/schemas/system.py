@@ -1,12 +1,18 @@
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
+
 from pydantic import BaseModel
 
 
-class ImageEngineStateOut(BaseModel):
-    current_engine: str
-    engine_label: str
-    pending_confirmation_count: int
-    pending_listing_ids: list[str]
-    last_openai_error: Optional[str]
-    last_switch_to_openai_at: Optional[datetime]
+class PendingRawPhotosItem(BaseModel):
+    id: UUID
+    sku_external_id: Optional[str]
+    created_via: str
+    waiting_since: datetime
+    error_message: Optional[str]
+
+
+class PendingRawPhotosOut(BaseModel):
+    count: int
+    listings: list[PendingRawPhotosItem]

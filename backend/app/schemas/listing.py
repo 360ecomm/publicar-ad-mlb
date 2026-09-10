@@ -122,10 +122,6 @@ class ImageApproveRequest(BaseModel):
     review_seconds: Optional[int] = None
 
 
-class ImageEngineConfirmRequest(BaseModel):
-    action: Literal["use_gemini", "retry_openai"]
-
-
 class ListingDetail(ListingSummary):
     sku_description: str
     price: Decimal

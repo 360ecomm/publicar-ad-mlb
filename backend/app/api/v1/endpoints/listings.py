@@ -14,7 +14,6 @@ from app.models.listing_job import ListingJob
 from app.models.listing_image import ListingImage
 from app.schemas.listing import (
     ImageApproveRequest,
-    ImageEngineConfirmRequest,
     ImageOut,
     ListingCreate,
     ListingDetail,
@@ -189,16 +188,17 @@ async def generate_images(
     return ListingSummary.model_validate(listing)
 
 
-@router.post("/{listing_id}/pipeline/confirm_image_engine", response_model=ListingSummary)
-async def confirm_image_engine(
+@router.post("/{listing_id}/pipeline/resume_raw_photos", response_model=ListingSummary)
+async def resume_raw_photos(
     listing_id: UUID,
-    body: ImageEngineConfirmRequest,
     active_seller=Depends(get_active_seller),
     db: AsyncSession = Depends(get_db),
 ):
+    """Retomada manual de `pending_raw_photos`: sonda o bucket agora, sem
+    esperar o proximo ciclo do beat. 409 se as fotos ainda nao estao la."""
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
-    await svc.confirm_image_engine(listing, body.action)
+    await svc.resume_raw_photos(listing)
     return ListingSummary.model_validate(listing)
 
 

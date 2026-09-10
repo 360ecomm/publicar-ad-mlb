@@ -149,7 +149,7 @@ Chaves relevantes:
 - `FERNET_KEY` — criptografia de tokens ML (base64 Fernet)
 - `POSTGRES_PASSWORD`, `REDIS_PASSWORD`
 - `AI_PROVIDER` — `gemini` (padrão) ou `claude`
-- `GEMINI_API_KEY` — usado para Gemini Flash (texto) e Gemini Imagen 4 (imagens)
+- `GEMINI_API_KEY` — usado só para Gemini Flash (texto). O Imagen 4 (texto-imagem) foi removido em 2026-09-10
 - `GEMINI_MODEL` — modelo de texto (ex: `gemini-2.0-flash`)
 - `ANTHROPIC_API_KEY` (se usar Claude como provider)
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` — Cloudflare R2 (configurado mas não usado no pipeline de imagens atualmente)
@@ -165,7 +165,7 @@ Chaves relevantes:
   `ALLOWED_ORIGINS=https://x` derruba o boot com `SettingsError`; a forma certa é
   `ALLOWED_ORIGINS=["https://x"]`. Em produção está **omitida** de propósito.
 
-> `FREEPIK_API_KEY` não é mais necessário — FreePik foi descartado; imagens geradas pelo Gemini Imagen 4.
+> `FREEPIK_API_KEY` não é mais necessário — FreePik foi descartado. Imagens são **edição** das fotos brutas do seller (`OpenAIEditEngine`); não existe mais geração do zero.
 
 > **`OPENAI_IMAGE_MODEL`: o `.env` mascara o default do `config.py`.** O default
 > no código é `gpt-image-2`, mas produção rodou semanas com `gpt-image-1`
@@ -287,9 +287,8 @@ Nos endpoints, usa-se `Depends(get_db)` de `app.core.dependencies`.
 Nunca passar um objeto ORM com relacionamentos lazy direto para `Model.model_validate()` — causa `MissingGreenlet`. Sempre carregar os relacionamentos com queries separadas.
 
 ### Provider de IA — 4 métodos abstratos
-`AIProvider` (`ai/base.py`) declara `generate_titles`, `generate_description`,
-`generate_image_prompt` e `generate_card_copy`. **Provider novo tem que
-implementar os 4** — faltar um faz a classe estourar `TypeError` na
+`AIProvider` (`ai/base.py`) declara `generate_titles`, `generate_description`
+e `generate_card_copy`. **Provider novo tem que implementar os 3** — faltar um faz a classe estourar `TypeError` na
 instanciação. Os prompts ficam centralizados em `ai/prompts.py` como
 `build_*_prompt()`; `gemini.py` e `claude.py` compartilham a mesma assinatura
 `_call(prompt, max_tokens, temperature)`, e `claude.py` reusa `_extract_json`
@@ -401,7 +400,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `ai/base.py`, `ai/gemini.py`, `ai/claude.py`, `ai/prompts.py`, `ai/service.py` — providers de IA
 - `category_service.py` — CategoryService: prediz categoria ML + salva atributos; pré-preenche BRAND, MODEL, GTIN, SELLER_SKU, dimensões, peso com unidades corretas
 - `listing_service.py` — ListingService: CRUD + pipeline
-- `image_service.py` — GeminiImageService (Imagen 4 fast) + MLPictureService + `validate_image()` + `ensure_dimensions()` (upscale para 1024px antes do upload) + `ImageRateLimitError` (HTTP 429 → backoff 60s×2^retries)
+- `image_service.py` — MLPictureService + `validate_image()` + `ensure_dimensions()` (upscale para 1024px antes do upload) + `ImageRateLimitError` (HTTP 429 → backoff 60s×2^retries)
 - `publish_service.py` — PublishService + `get_valid_access_token()` + MLValidationError
 - `product_service.py` — ProductService (multi-tenant via `_base_query()`): list, get, create, update, upsert
 - `product_import_service.py` — parser CSV/XLSX de produtos (auto-detect delimitador)
@@ -430,7 +429,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 ### backend/app/workers/tasks/
 - `ai_tasks.py` — `generate_title`, `generate_description`
 - `category_tasks.py` — `predict_category` (batch: atomic UPDATE + Celery chain se sem attrs pendentes)
-- `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; `ensure_dimensions` antes do upload) + `_append_benefit_cards` (3 cards depois das individuais; só para 1 SKU e só se ao menos 1 individual foi salva; nunca levanta — falha vira log e zero cards)
+- `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; sem foto bruta no bucket → `pending_raw_photos`, nunca fallback; `ensure_dimensions` antes do upload)
+- `raw_photo_tasks.py` — `check_pending_raw_photos`: **única tarefa do celery_beat** (a cada 15 min), retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + mesma chain do lote) + `_append_benefit_cards` (3 cards depois das individuais; só para 1 SKU e só se ao menos 1 individual foi salva; nunca levanta — falha vira log e zero cards)
 - `publish_tasks.py` — `publish_listing` (MLValidationError → failed sem retry)
 - `batch_tasks.py` — `process_batch` (lê planilha, cria listings, dispara pipeline)
 
@@ -444,7 +444,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 > esquecer de mockar o provider de IA, ele falha em alto e bom som em vez de
 > gastar chamada paga.
 
-- `test_image_service.py` — `TestEnsureDimensions` (5 casos), `TestGeminiImageService429` (2 casos)
+- `test_image_service.py` — `TestEnsureDimensions` (5 casos)
 - `test_image_tasks.py` — `TestMarkFailed` (4), `TestGenerateImagesRateLimit` (2), `TestFetchUploadToken` (2), `TestGenerateImagesIdempotency` (2)
 - `test_batch_chain.py` — `TestCategoryTaskChainDispatch` (3), `TestSubmitAttributesChainDispatch` (1), `TestRemovedInternalDispatch` (2)
 - `test_image_card_copy_service.py` — saneamento da copy, denylist de conteúdo (true positives + **13 casos de falso positivo**: `12V`, `3,5cm`, `500ml`, `12,50 m`, `99,9%`, `5000mAh`…)
@@ -485,6 +485,7 @@ draft
                                                                                                           └─(batch: pausa — SKU aguarda ação manual)
                                                                                        └─(pending_description)──► [manual: pipeline/generate_images]
                                                                                                                     └─(batch: auto)──► generating_images
+                                                                                                                                         └─(sem {sku}-1.jpg/-2.jpg no bucket)──► pending_raw_photos ──(beat 15 min ou resume_raw_photos)──► generating_images
                                                                                                                                          └─(worker OK)──► pending_image_approval [manual]
                                                                                                                                                              └─(images/approve)──► generating_description
                                                                                                                                          └─(batch: auto-aprova)──► generating_description
@@ -595,6 +596,8 @@ POST   /api/v1/listings/{id}/pipeline/generate_images
 POST   /api/v1/listings/{id}/images/approve
 POST   /api/v1/listings/{id}/pipeline/publish
 POST   /api/v1/listings/{id}/activate                    published_paused → published
+POST   /api/v1/listings/{id}/pipeline/resume_raw_photos  retomada manual de pending_raw_photos (409 se as fotos ainda faltam)
+GET    /api/v1/system/pending-raw-photos                 contagem/lista dos listings do seller em pending_raw_photos
 
 POST   /api/v1/listings/{id}/images/cover-ai-variant     candidato cover_ai (sort_order 90)
 POST   /api/v1/listings/{id}/images/specs-ai-variant     candidato specs_ai (sort_order 91)

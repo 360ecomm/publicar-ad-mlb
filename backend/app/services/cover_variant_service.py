@@ -134,7 +134,7 @@ async def _load_latest_deterministic_cover(db, listing):
     passada de `_try_i2i_generation` insere uma — inclusive uma linha
     `validation_failed` com `image_bytes=None` quando a QA reprova. Uma
     segunda passada (retry_pipeline -> submit_attributes -> generate_images,
-    ou `confirm_image_engine("retry_openai")`) cria a segunda linha, e ai
+    ou a retomada de `pending_raw_photos`) cria a segunda linha, e ai
     `scalar_one_or_none` estouraria `MultipleResultsFound` — um 500 opaco no
     lugar do 409 deliberado.
 

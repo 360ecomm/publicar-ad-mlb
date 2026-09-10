@@ -13,6 +13,7 @@ celery_app = Celery(
         "app.workers.tasks.category_tasks",
         "app.workers.tasks.image_tasks",
         "app.workers.tasks.publish_tasks",
+        "app.workers.tasks.raw_photo_tasks",
     ],
 )
 
@@ -32,5 +33,15 @@ celery_app.conf.update(
         "app.workers.tasks.image_tasks.*": {"queue": "images"},
         "app.workers.tasks.publish_tasks.*": {"queue": "publish"},
         "app.workers.tasks.category_tasks.*": {"queue": "default"},
+        "app.workers.tasks.raw_photo_tasks.*": {"queue": "default"},
+    },
+    # Unica tarefa periodica do sistema (o beat era vazio ate 2026-09-10):
+    # retoma listings em `pending_raw_photos` assim que as fotos brutas
+    # aparecem no bucket do seller. Ver raw_photo_standby_service.
+    beat_schedule={
+        "check-pending-raw-photos": {
+            "task": "app.workers.tasks.raw_photo_tasks.check_pending_raw_photos",
+            "schedule": 15 * 60,
+        },
     },
 )

@@ -44,7 +44,7 @@ const COLUMNS: {
   {
     id: "imagens",
     title: "Imagens",
-    statuses: ["generating_images", "pending_image_engine_confirmation", "pending_image_approval"],
+    statuses: ["generating_images", "pending_raw_photos", "pending_image_approval"],
     failedSteps: ["generating_images", "pending_image_approval"],
     colorClass: "border-t-orange-400",
   },
