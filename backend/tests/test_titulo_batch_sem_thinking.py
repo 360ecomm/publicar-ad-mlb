@@ -1,3 +1,4 @@
+
 """Titulo em lote: thinking desligado, e resposta cortada nunca vira titulo.
 
 O caso real (2026-09-09, lote T37/T38 em producao): `generate_titles` em
@@ -105,3 +106,23 @@ class TestTetoDeTokensNoLote:
         cfg = _generation_config(mock_post)
         assert cfg["maxOutputTokens"] >= 2000
         assert cfg["thinkingConfig"] == {"thinkingBudget": 0}
+
+
+class TestCardCopySemThinking:
+    @pytest.mark.asyncio
+    async def test_card_copy_desliga_thinking_e_tem_teto_folgado(self):
+        """Posicao 3 do T38 (2026-09-10) nao saiu: a copy do card foi cortada
+        (finish=MAX_TOKENS, teto 1200, 1125 tokens de thought) e
+        `generate_card_copy` do service devolveu [] em silencio. Mesma classe
+        do bug do titulo, mesmo tratamento: budget 0 (melhor esforco) e teto
+        folgado para quando o modelo pensa mesmo assim."""
+        resposta = '{"cards": [{"kind": "card_benefits", "title": "Fixação", "bullets": ["a", "b"]}]}'
+        mock_post = AsyncMock(return_value=_resposta(resposta, "STOP"))
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value.post = mock_post
+            await GeminiProvider().generate_card_copy({"selected_title": "t", "attributes": []})
+
+        cfg = _generation_config(mock_post)
+        assert cfg["thinkingConfig"] == {"thinkingBudget": 0}
+        assert cfg["maxOutputTokens"] >= 2000
