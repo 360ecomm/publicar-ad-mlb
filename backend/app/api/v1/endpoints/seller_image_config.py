@@ -15,9 +15,6 @@ def _to_out(cfg: SellerImageConfig) -> SellerImageConfigOut:
         id=cfg.id,
         seller_id=cfg.seller_id,
         raw_base_url=cfg.raw_base_url,
-        write_bucket_name=cfg.write_bucket_name,
-        write_endpoint_url=cfg.write_endpoint_url,
-        has_write_credentials=bool(cfg.write_access_key_id_enc and cfg.write_secret_access_key_enc),
         created_at=cfg.created_at,
         updated_at=cfg.updated_at,
     )

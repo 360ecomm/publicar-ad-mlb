@@ -18,9 +18,6 @@ function getImageUrl(image: ImageOut): string | null {
   if (image.ml_picture_id) {
     return `https://http2.mlstatic.com/D_NQ_NP_${image.ml_picture_id}-V.jpg`
   }
-  if (image.url_r2) {
-    return image.url_r2
-  }
   return null
 }
 

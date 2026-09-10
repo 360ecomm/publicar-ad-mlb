@@ -65,18 +65,9 @@ async def _publish_listing_async(listing_id: str) -> dict:
         listing.status = "published_paused"
         await db.commit()
 
-        from app.models.seller_image_config import SellerImageConfig
-        from app.services.r2_write_service import write_back_images
-
-        seller_image_config = (
-            await db.execute(
-                select(SellerImageConfig).where(SellerImageConfig.seller_id == listing.seller_id)
-            )
-        ).scalar_one_or_none()
-        try:
-            await write_back_images(db, listing, seller_image_config, access_token)
-        except Exception:
-            pass  # best-effort — nunca bloqueia a publicacao, que ja aconteceu com sucesso
+        # A entrega das fotos no bucket proprio do seller (RF7, `r2_write_service`)
+        # saiu em 2026-09-10 sem nunca ter sido usada — ver
+        # docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md
 
     return {"listing_id": listing_id, "mlb_id": mlb_id}
 

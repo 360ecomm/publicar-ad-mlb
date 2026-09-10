@@ -103,10 +103,6 @@ export default function SettingsPage() {
   // --- Seller Image Config form state ---
   const [imageConfigForm, setImageConfigForm] = useState({
     raw_base_url: "",
-    write_bucket_name: "",
-    write_endpoint_url: "",
-    write_access_key_id: "",
-    write_secret_access_key: "",
   })
 
   const { data: imageConfig } = useQuery({
@@ -134,10 +130,6 @@ export default function SettingsPage() {
     }
     imageConfigMutation.mutate({
       raw_base_url: imageConfigForm.raw_base_url.trim(),
-      write_bucket_name: imageConfigForm.write_bucket_name.trim() || null,
-      write_endpoint_url: imageConfigForm.write_endpoint_url.trim() || null,
-      write_access_key_id: imageConfigForm.write_access_key_id.trim() || null,
-      write_secret_access_key: imageConfigForm.write_secret_access_key.trim() || null,
     })
   }
 
@@ -614,49 +606,6 @@ export default function SettingsPage() {
                 defaultValue={imageConfig?.raw_base_url ?? ""}
                 onChange={(e) => setImageConfigForm((f) => ({ ...f, raw_base_url: e.target.value }))}
               />
-            </div>
-
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">
-              Escrita de volta (opcional — best-effort)
-            </p>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="ic-write-bucket">Bucket de escrita</Label>
-                <Input
-                  id="ic-write-bucket"
-                  placeholder="ex: meu-bucket"
-                  defaultValue={imageConfig?.write_bucket_name ?? ""}
-                  onChange={(e) => setImageConfigForm((f) => ({ ...f, write_bucket_name: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ic-write-endpoint">Endpoint S3-compatível</Label>
-                <Input
-                  id="ic-write-endpoint"
-                  placeholder="ex: https://account.r2.cloudflarestorage.com"
-                  defaultValue={imageConfig?.write_endpoint_url ?? ""}
-                  onChange={(e) => setImageConfigForm((f) => ({ ...f, write_endpoint_url: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ic-write-key">Access Key ID</Label>
-                <Input
-                  id="ic-write-key"
-                  type="password"
-                  placeholder={imageConfig?.has_write_credentials ? "•••••••• (configurado)" : "opcional"}
-                  onChange={(e) => setImageConfigForm((f) => ({ ...f, write_access_key_id: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ic-write-secret">Secret Access Key</Label>
-                <Input
-                  id="ic-write-secret"
-                  type="password"
-                  placeholder={imageConfig?.has_write_credentials ? "•••••••• (configurado)" : "opcional"}
-                  onChange={(e) => setImageConfigForm((f) => ({ ...f, write_secret_access_key: e.target.value }))}
-                />
-              </div>
             </div>
 
             <Button type="submit" size="sm" disabled={imageConfigMutation.isPending}>

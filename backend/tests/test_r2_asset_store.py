@@ -27,11 +27,41 @@ def _settings(**over):
 
 
 class TestChaveEConfig:
-    def test_chave_organiza_por_seller_sku_listing_kind(self):
+    def test_chave_legivel_por_apelido_sku_kind_e_timestamp(self):
+        """{apelido_ml}/{sku}/{kind}-{AAAAMMDD-HHMMSS}-{4hex}.jpg — sem uuid interno
+        nem camada de listing (essa relacao ja vive no banco)."""
+        from datetime import datetime, timezone
         from app.services.r2_asset_service import asset_key_for
 
-        k = asset_key_for(seller_id="sid", sku="45", listing_id="lid", kind="cover_ai", token="abc123", ext="jpg")
-        assert k == "sid/45/lid/cover_ai-abc123.jpg"
+        quando = datetime(2026, 9, 10, 23, 45, 12, tzinfo=timezone.utc)
+        k = asset_key_for(seller_slug="CAFE085", sku="37", kind="cover_ai", when=quando, token="ab12", ext="jpg")
+        assert k == "CAFE085/37/cover_ai-20260910-234512-ab12.jpg"
+
+    def test_duas_chaves_no_mesmo_segundo_nao_colidem(self):
+        from datetime import datetime, timezone
+        from app.services.r2_asset_service import asset_key_for
+
+        quando = datetime(2026, 9, 10, 23, 45, 12, tzinfo=timezone.utc)
+        chaves = {asset_key_for(seller_slug="CAFE085", sku="37", kind="cover_ai", when=quando) for _ in range(200)}
+        assert len(chaves) == 200
+        assert all(c.startswith("CAFE085/37/cover_ai-20260910-234512-") for c in chaves)
+
+    def test_ordem_cronologica_pelo_nome(self):
+        from datetime import datetime, timezone, timedelta
+        from app.services.r2_asset_service import asset_key_for
+
+        t0 = datetime(2026, 9, 10, 23, 45, 12, tzinfo=timezone.utc)
+        antes = asset_key_for(seller_slug="X", sku="1", kind="k", when=t0, token="zzzz")
+        depois = asset_key_for(seller_slug="X", sku="1", kind="k", when=t0 + timedelta(seconds=1), token="aaaa")
+        assert antes < depois, "timestamp manda; o sufixo so desempata"
+
+    def test_apelido_e_sku_sao_saneados_para_caminho(self):
+        from app.services.r2_asset_service import seller_slug_from, asset_key_for
+
+        assert seller_slug_from("CAFE085") == "CAFE085"
+        assert seller_slug_from("Loja do Zé/Filial #2") == "Loja_do_Z__Filial__2"
+        assert seller_slug_from("") == "seller"
+        assert asset_key_for(seller_slug="A", sku="SKU 45/X", kind="k", token="t").startswith("A/SKU_45_X/k-")
 
     def test_configurado_so_com_as_4_variaveis(self):
         from app.services.r2_asset_service import R2AssetStore
@@ -69,6 +99,12 @@ class TestPutEGet:
         boto.client.return_value.get_object.assert_called_once_with(Bucket="r2-mktp-img-ia", Key="k")
 
 
+def _db_com_apelido(apelido):
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=apelido)))
+    return db
+
+
 class TestStoreCandidateBytes:
     @pytest.mark.asyncio
     async def test_grava_e_devolve_a_chave(self):
@@ -76,9 +112,9 @@ class TestStoreCandidateBytes:
 
         store = MagicMock(); store.configured = True; store.put = AsyncMock()
         with patch("app.services.r2_asset_service.get_asset_store", return_value=store):
-            key = await store_candidate_bytes(b"jpeg", seller_id="sid", sku="45", listing_id="lid", kind="specs_ai")
+            key = await store_candidate_bytes(b"jpeg", db=_db_com_apelido("CAFE085"), seller_id="sid", sku="45", kind="specs_ai")
 
-        assert key.startswith("sid/45/lid/specs_ai-") and key.endswith(".jpg")
+        assert key.startswith("CAFE085/45/specs_ai-") and key.endswith(".jpg")
         store.put.assert_awaited_once_with(key, b"jpeg", "image/jpeg")
 
     @pytest.mark.asyncio
@@ -87,7 +123,7 @@ class TestStoreCandidateBytes:
 
         store = MagicMock(); store.configured = False; store.put = AsyncMock()
         with patch("app.services.r2_asset_service.get_asset_store", return_value=store):
-            key = await store_candidate_bytes(b"jpeg", seller_id="sid", sku="45", listing_id="lid", kind="cover_ai")
+            key = await store_candidate_bytes(b"jpeg", db=_db_com_apelido("CAFE085"), seller_id="sid", sku="45", kind="cover_ai")
 
         assert key is None
         store.put.assert_not_awaited()
@@ -99,7 +135,7 @@ class TestStoreCandidateBytes:
 
         store = MagicMock(); store.configured = True; store.put = AsyncMock(side_effect=RuntimeError("boom"))
         with patch("app.services.r2_asset_service.get_asset_store", return_value=store):
-            assert await store_candidate_bytes(b"x", seller_id="s", sku="1", listing_id="l", kind="cover_ai") is None
+            assert await store_candidate_bytes(b"x", db=_db_com_apelido("CAFE085"), seller_id="s", sku="1", kind="cover_ai") is None
 
 
 class TestLoadCandidateBytes:
@@ -107,7 +143,7 @@ class TestLoadCandidateBytes:
     async def test_le_pela_chave(self):
         from app.services.r2_asset_service import load_candidate_bytes
 
-        img = MagicMock(); img.asset_key = "sid/45/lid/cover_deterministic-x.jpg"
+        img = MagicMock(); img.asset_key = "CAFE085/45/cover_deterministic-20260910-120000-ab12.jpg"
         store = MagicMock(); store.configured = True; store.get = AsyncMock(return_value=b"capa")
         with patch("app.services.r2_asset_service.get_asset_store", return_value=store):
             assert await load_candidate_bytes(img) == b"capa"
@@ -146,14 +182,14 @@ class TestSalvarPosicaoEscreveNoR2:
         db = AsyncMock(); db.add = MagicMock()
         with patch("app.workers.tasks.image_tasks._prepare_image_for_upload", return_value=(b"preparado", MagicMock(is_valid=True))), \
              patch("app.services.image_service.MLPictureService") as ml, \
-             patch("app.services.r2_asset_service.store_candidate_bytes", new_callable=AsyncMock, return_value="sid/45/lid/cover_ai-x.jpg") as store:
+             patch("app.services.r2_asset_service.store_candidate_bytes", new_callable=AsyncMock, return_value="CAFE085/45/cover_ai-20260910-120000-ab12.jpg") as store:
             ml.return_value.upload = AsyncMock(return_value="pic-1")
             ok = await _salvar_posicao(db, listing, "45", "cover_ai", 0, b"gerado", "tok", requires_white_bg=True)
 
         assert ok is True
-        store.assert_awaited_once_with(b"preparado", seller_id="sid", sku="45", listing_id="lid", kind="cover_ai")
+        store.assert_awaited_once_with(b"preparado", db=db, seller_id="sid", sku="45", kind="cover_ai")
         linha = db.add.call_args.args[0]
-        assert linha.asset_key == "sid/45/lid/cover_ai-x.jpg"
+        assert linha.asset_key == "CAFE085/45/cover_ai-20260910-120000-ab12.jpg"
         assert not hasattr(linha, "image_bytes") or linha.__table__.columns.get("image_bytes") is None
 
     @pytest.mark.asyncio
@@ -167,5 +203,5 @@ class TestSalvarPosicaoEscreveNoR2:
             ok = await _salvar_posicao(db, listing, "45", "detail_ai", 3, b"cru", "tok", requires_white_bg=False)
 
         assert ok is False
-        store.assert_awaited_once_with(b"cru", seller_id="sid", sku="45", listing_id="lid", kind="detail_ai")
+        store.assert_awaited_once_with(b"cru", db=db, seller_id="sid", sku="45", kind="detail_ai")
         assert db.add.call_args.args[0].asset_key == "k-reprovada"

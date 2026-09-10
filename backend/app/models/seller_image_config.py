@@ -14,7 +14,3 @@ class SellerImageConfig(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("sellers.id", ondelete="CASCADE"), nullable=False, unique=True
     )
     raw_base_url: Mapped[str] = mapped_column(Text, nullable=False)
-    write_bucket_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    write_endpoint_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    write_access_key_id_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    write_secret_access_key_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

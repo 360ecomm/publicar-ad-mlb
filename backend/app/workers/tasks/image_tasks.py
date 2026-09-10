@@ -332,7 +332,7 @@ async def _salvar_posicao(db, listing, sku, kind, sort_order, gerado, access_tok
         # Bytes crus do que a IA produziu vao ao R2 mesmo reprovados: um
         # candidato existe para alguem julgar. NUNCA no banco.
         asset_key = await store_candidate_bytes(
-            gerado, seller_id=listing.seller_id, sku=sku, listing_id=listing.id, kind=kind
+            gerado, db=db, seller_id=listing.seller_id, sku=sku, kind=kind
         )
         db.add(ListingImage(
             listing_id=listing.id, status="validation_failed",
@@ -349,7 +349,7 @@ async def _salvar_posicao(db, listing, sku, kind, sort_order, gerado, access_tok
     # Write-back no R2 no MESMO momento do upload ao ML: os bytes exatos que
     # foram para o CDN, para variantes por IA partirem do arquivo publicado.
     asset_key = await store_candidate_bytes(
-        preparado, seller_id=listing.seller_id, sku=sku, listing_id=listing.id, kind=kind
+        preparado, db=db, seller_id=listing.seller_id, sku=sku, kind=kind
     )
     db.add(ListingImage(
         listing_id=listing.id, ml_picture_id=ml_picture_id, status="uploaded",
@@ -419,7 +419,7 @@ async def _gerar_cinco_posicoes(db, listing, access_token, profile, fotos, sku) 
 
         ml_picture_id = await MLPictureService().upload(base, access_token)
         asset_key = await store_candidate_bytes(
-            base, seller_id=listing.seller_id, sku=sku, listing_id=listing.id, kind="cover_deterministic"
+            base, db=db, seller_id=listing.seller_id, sku=sku, kind="cover_deterministic"
         )
         db.add(ListingImage(
             listing_id=listing.id, ml_picture_id=ml_picture_id, status="uploaded",

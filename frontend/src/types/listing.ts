@@ -52,7 +52,6 @@ export interface AttributeOut {
 
 export interface ImageOut {
   id: string
-  url_r2: string | null
   ml_picture_id: string | null
   status: string
   approved: boolean
