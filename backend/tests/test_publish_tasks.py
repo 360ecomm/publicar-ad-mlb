@@ -12,7 +12,7 @@ class TestPublishListingIdempotency:
     @pytest.mark.asyncio
     async def test_skips_when_status_not_publishing(self):
         """Guard defends against a Celery chain proceeding past a pause set
-        by an earlier link (e.g. pending_image_engine_confirmation) without
+        by an earlier link (e.g. pending_raw_photos) without
         raising — this step must no-op instead of publishing an incomplete
         listing (e.g. zero images)."""
         from app.workers.tasks.publish_tasks import _publish_listing_async

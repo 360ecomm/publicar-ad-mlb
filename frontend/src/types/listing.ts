@@ -8,7 +8,7 @@ export type ListingStatus =
   | "pending_seller_attributes"
   | "pending_description"
   | "generating_images"
-  | "pending_image_engine_confirmation"
+  | "pending_raw_photos"
   | "pending_image_approval"
   | "generating_description"
   | "ready_to_publish"
@@ -97,7 +97,7 @@ export const STATUS_LABELS: Record<ListingStatus, string> = {
   pending_seller_attributes: "Aguardando atributos",
   pending_description: "Aguardando descrição",
   generating_images: "Gerando imagens",
-  pending_image_engine_confirmation: "Aguardando confirmação de motor de imagem",
+  pending_raw_photos: "Aguardando fotos brutas",
   pending_image_approval: "Aguardando aprovação de imagens",
   generating_description: "Gerando descrição",
   ready_to_publish: "Pronto para publicar",
@@ -119,7 +119,7 @@ export const WAITING_STATUSES: ListingStatus[] = [
   "pending_title_approval",
   "pending_seller_attributes",
   "pending_image_approval",
-  "pending_image_engine_confirmation",
+  "pending_raw_photos",
   "ready_to_publish",
 ]
 

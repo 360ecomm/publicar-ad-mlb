@@ -4,7 +4,6 @@ import pytest
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.image_engines.base import ImageRateLimitError
 
 
 @asynccontextmanager
@@ -95,54 +94,6 @@ class TestMarkFailed:
             await _mark_failed("abc-123", "error")  # must not raise
 
 
-class TestGenerateImagesRateLimit:
-    def test_rate_limit_error_uses_longer_countdown(self):
-        from app.workers.tasks.image_tasks import generate_images
-
-        retry_calls = []
-
-        def fake_retry(exc, countdown):
-            retry_calls.append(countdown)
-            raise exc
-
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-        mock_self.max_retries = 2
-        mock_self.retry = fake_retry
-
-        with patch(
-            "app.workers.tasks.image_tasks.asyncio.run",
-            side_effect=ImageRateLimitError("quota hit"),
-        ):
-            with pytest.raises(ImageRateLimitError):
-                generate_images.run.__func__(mock_self, "listing-abc")
-
-        assert retry_calls == [60], f"Expected countdown=60, got {retry_calls}"
-
-    def test_generic_error_uses_short_countdown(self):
-        from app.workers.tasks.image_tasks import generate_images
-
-        retry_calls = []
-
-        def fake_retry(exc, countdown):
-            retry_calls.append(countdown)
-            raise exc
-
-        mock_self = MagicMock()
-        mock_self.request.retries = 0
-        mock_self.max_retries = 2
-        mock_self.retry = fake_retry
-
-        with patch(
-            "app.workers.tasks.image_tasks.asyncio.run",
-            side_effect=RuntimeError("network error"),
-        ):
-            with pytest.raises(RuntimeError):
-                generate_images.run.__func__(mock_self, "listing-abc")
-
-        assert retry_calls == [5], f"Expected countdown=5, got {retry_calls}"
-
-
 class TestFetchUploadToken:
     @pytest.mark.asyncio
     async def test_calls_get_valid_access_token(self):
@@ -198,198 +149,24 @@ class TestGenerateImagesIdempotency:
 
     @pytest.mark.asyncio
     async def test_proceeds_when_status_is_generating_images(self):
-        """Verificação negativa: guard NÃO aborta quando status está correto."""
+        """Verificação negativa: guard NÃO aborta quando status está correto —
+        chega até a tentativa de geração (`_try_i2i_generation`)."""
         from app.workers.tasks.image_tasks import _generate_images_async
 
         mock_listing = MagicMock()
         mock_listing.status = "generating_images"
-        mock_listing.sku_external_id = None
+        mock_listing.sku_external_id = "SKU"
         mock_listing.seller_id = "sid"
         mock_listing.created_via = "manual"
 
-        mock_engine_state = MagicMock()
-        mock_engine_state.current_engine = "openai"
-
         mock_db = AsyncMock()
-        execute_calls = [0]
-
-        async def execute_side(stmt):
-            execute_calls[0] += 1
-            r = MagicMock()
-            if execute_calls[0] == 1:      # SELECT Listing
-                r.scalar_one = MagicMock(return_value=mock_listing)
-            elif execute_calls[0] == 2:    # SELECT Seller
-                r.scalar_one = MagicMock(return_value=MagicMock())
-            else:                          # SELECT ImageEngineState
-                r.scalar_one = MagicMock(return_value=mock_engine_state)
-            return r
-
-        mock_db.execute = execute_side
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one=MagicMock(return_value=mock_listing)))
         mock_db.commit = AsyncMock()
 
-        with patch("app.database.worker_session", lambda: _mock_session(mock_db)), \
-             patch("app.workers.tasks.image_tasks._fetch_upload_token", new_callable=AsyncMock, return_value="tok"), \
-             patch("app.services.ai.service.get_ai_provider", return_value=AsyncMock(
-                 generate_image_prompt=AsyncMock(return_value="prompt")
-             )), \
-             patch("app.services.image_engines.openai_engine.OpenAIImageEngine") as mock_openai_cls:
-            mock_openai_cls.return_value.generate = AsyncMock(return_value=[])
-            try:
-                await _generate_images_async("listing-id")
-            except Exception:
-                pass  # pode falhar após o guard — o que importa é que chegou aqui
+        with patch("app.database.worker_session", lambda: _mock_session(mock_db)),              patch("app.workers.tasks.image_tasks._fetch_upload_token", new_callable=AsyncMock, return_value="tok"),              patch("app.workers.tasks.image_tasks._try_i2i_generation", new_callable=AsyncMock, return_value=None) as i2i:
+            await _generate_images_async("listing-id")
 
-        mock_openai_cls.assert_called_once()
-
-
-class TestImageEngineDecisionFlow:
-    @pytest.mark.asyncio
-    async def test_openai_infra_failure_sets_pending_confirmation(self):
-        from app.workers.tasks.image_tasks import _generate_images_async
-        from app.services.image_engines.base import ImageEngineUnavailableError
-
-        mock_listing = MagicMock()
-        mock_listing.id = "lid"
-        mock_listing.status = "generating_images"
-        mock_listing.sku_external_id = None
-        mock_listing.seller_id = "sid"
-        mock_listing.created_via = "manual"
-
-        mock_engine_state = MagicMock()
-        mock_engine_state.current_engine = "openai"
-
-        mock_db = AsyncMock()
-        execute_calls = [0]
-
-        async def execute_side(stmt):
-            execute_calls[0] += 1
-            r = MagicMock()
-            if execute_calls[0] == 1:
-                r.scalar_one = MagicMock(return_value=mock_listing)
-            elif execute_calls[0] == 2:
-                r.scalar_one = MagicMock(return_value=MagicMock())
-            else:
-                r.scalar_one = MagicMock(return_value=mock_engine_state)
-            return r
-
-        mock_db.execute = execute_side
-        mock_db.commit = AsyncMock()
-
-        with patch("app.database.worker_session", lambda: _mock_session(mock_db)), \
-             patch("app.workers.tasks.image_tasks._fetch_upload_token", new_callable=AsyncMock, return_value="tok"), \
-             patch("app.services.ai.service.get_ai_provider", return_value=AsyncMock(
-                 generate_image_prompt=AsyncMock(return_value="prompt")
-             )), \
-             patch("app.services.image_engines.openai_engine.OpenAIImageEngine") as mock_openai_cls:
-            mock_openai_cls.return_value.generate = AsyncMock(
-                side_effect=ImageEngineUnavailableError("timeout")
-            )
-            result = await _generate_images_async("lid")
-
-        assert result == {"listing_id": "lid", "pending_image_engine_confirmation": True}
-        assert mock_listing.status == "pending_image_engine_confirmation"
-        assert mock_engine_state.last_openai_error == "timeout"
-
-    @pytest.mark.asyncio
-    async def test_gemini_auto_switches_back_when_openai_healthy(self):
-        from app.workers.tasks.image_tasks import _generate_images_async
-
-        mock_listing = MagicMock()
-        mock_listing.id = "lid"
-        mock_listing.status = "generating_images"
-        mock_listing.sku_external_id = None
-        mock_listing.seller_id = "sid"
-        mock_listing.created_via = "manual"
-
-        mock_engine_state = MagicMock()
-        mock_engine_state.current_engine = "gemini"
-
-        mock_db = AsyncMock()
-        execute_calls = [0]
-
-        async def execute_side(stmt):
-            execute_calls[0] += 1
-            r = MagicMock()
-            if execute_calls[0] == 1:
-                r.scalar_one = MagicMock(return_value=mock_listing)
-            elif execute_calls[0] == 2:
-                r.scalar_one = MagicMock(return_value=MagicMock())
-            else:
-                r.scalar_one = MagicMock(return_value=mock_engine_state)
-            return r
-
-        mock_db.execute = execute_side
-        mock_db.commit = AsyncMock()
-
-        with patch("app.database.worker_session", lambda: _mock_session(mock_db)), \
-             patch("app.workers.tasks.image_tasks._fetch_upload_token", new_callable=AsyncMock, return_value="tok"), \
-             patch("app.services.ai.service.get_ai_provider", return_value=AsyncMock(
-                 generate_image_prompt=AsyncMock(return_value="prompt")
-             )), \
-             patch("app.services.image_engines.openai_engine.check_openai_health", new_callable=AsyncMock, return_value=True), \
-             patch("app.services.image_engines.openai_engine.OpenAIImageEngine") as mock_openai_cls:
-            mock_openai_cls.return_value.generate = AsyncMock(return_value=[])
-            try:
-                await _generate_images_async("lid")
-            except RuntimeError:
-                pass  # "Nenhuma imagem válida" — irrelevante para este teste
-
-        assert mock_engine_state.current_engine == "openai"
-        assert mock_engine_state.last_openai_error is None
-        assert mock_engine_state.last_switch_to_openai_at is not None
-        mock_openai_cls.return_value.generate.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_gemini_stays_when_openai_still_unhealthy(self):
-        from app.workers.tasks.image_tasks import _generate_images_async
-
-        mock_listing = MagicMock()
-        mock_listing.id = "lid"
-        mock_listing.status = "generating_images"
-        mock_listing.sku_external_id = None
-        mock_listing.seller_id = "sid"
-        mock_listing.created_via = "manual"
-
-        mock_engine_state = MagicMock()
-        mock_engine_state.current_engine = "gemini"
-
-        mock_db = AsyncMock()
-        execute_calls = [0]
-
-        async def execute_side(stmt):
-            execute_calls[0] += 1
-            r = MagicMock()
-            if execute_calls[0] == 1:
-                r.scalar_one = MagicMock(return_value=mock_listing)
-            elif execute_calls[0] == 2:
-                r.scalar_one = MagicMock(return_value=MagicMock())
-            else:
-                r.scalar_one = MagicMock(return_value=mock_engine_state)
-            return r
-
-        mock_db.execute = execute_side
-        mock_db.commit = AsyncMock()
-
-        with patch("app.database.worker_session", lambda: _mock_session(mock_db)), \
-             patch("app.workers.tasks.image_tasks._fetch_upload_token", new_callable=AsyncMock, return_value="tok"), \
-             patch("app.services.ai.service.get_ai_provider", return_value=AsyncMock(
-                 generate_image_prompt=AsyncMock(return_value="prompt")
-             )), \
-             patch("app.services.image_engines.openai_engine.check_openai_health", new_callable=AsyncMock, return_value=False), \
-             patch("app.services.image_engines.gemini_engine.GeminiImageEngine") as mock_gemini_cls:
-            mock_gemini_cls.return_value.generate = AsyncMock(return_value=[])
-            try:
-                await _generate_images_async("lid")
-            except RuntimeError:
-                pass
-
-        assert mock_engine_state.current_engine == "gemini"
-        mock_gemini_cls.return_value.generate.assert_called_once()
-
-
-# --------------------------------------------------------------------------
-# QA antes do upload (Passo 3): imagem reprovada nao sobe e nao trava o anuncio
-# --------------------------------------------------------------------------
+        i2i.assert_awaited_once()
 
 
 def _png(width: int, height: int, color=(255, 255, 255)) -> bytes:
@@ -622,7 +399,7 @@ class TestBatchApprovalNeverApprovesCandidates:
     capa por acao humana (`promote_cover`). A aprovacao em massa do ramo batch
     seleciona por `status == "uploaded"` — que e exatamente o status de um
     candidato que subiu com sucesso — entao sem filtro de `kind` uma SEGUNDA
-    passada do pipeline (retry, confirm_image_engine) aprovaria o candidato, e
+    passada do pipeline (retry, retomada de pending_raw_photos) aprovaria o candidato, e
     imagem aprovada com `ml_picture_id` vai direto para o payload de
     publicacao no ML real.
     """

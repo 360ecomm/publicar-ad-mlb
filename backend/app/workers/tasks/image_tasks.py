@@ -417,8 +417,6 @@ async def _generate_images_async(listing_id: str) -> dict:
     from app.models.listing_image import CANDIDATE_KINDS, ListingImage
     from app.models.product_image import ProductImage
     from app.models.seller import Seller
-    from app.services.ai.service import get_ai_provider
-    from app.services.image_service import MLPictureService
 
     async with worker_session() as db:
         listing = (
@@ -443,11 +441,6 @@ async def _generate_images_async(listing_id: str) -> dict:
         # posicoes e sem o guard de revisao humana. Removido em 2026-09-10:
         # todo listing SEMPRE gera as suas imagens. O indice SKU→imagem
         # (`ProductImage`) continua sendo escrito, como registro, nao atalho.
-        from datetime import datetime, timezone
-        from app.services.image_engines.base import ImageEngineUnavailableError
-        from app.services.image_engines.openai_engine import check_openai_health
-        from app.services.image_engines.service import get_engine_instance, get_engine_state
-
         seller = (
             await db.execute(select(Seller).where(Seller.id == listing.seller_id))
         ).scalar_one()
@@ -504,111 +497,29 @@ async def _generate_images_async(listing_id: str) -> dict:
                 await db.commit()
             return {"listing_id": listing_id, "images_saved": i2i_saved, "source": "i2i"}
 
-        engine_state = await get_engine_state(db)
-
-        if engine_state.current_engine == "gemini" and await check_openai_health():
-            engine_state.current_engine = "openai"
-            engine_state.last_openai_error = None
-            engine_state.last_switch_to_openai_at = datetime.now(timezone.utc)
-            await db.commit()
-
-        ai = get_ai_provider()
-        prompt = await ai.generate_image_prompt(
-            brand=listing.sku_brand,
-            title=listing.selected_title or "",
-            description=listing.sku_description,
+        # Sem foto bruta no bucket: STANDBY, nunca fallback. Aqui existia o
+        # caminho texto-imagem (prompt do LLM + motor gerando do zero), que em
+        # lote auto-aprovava e publicava anuncio com imagem inventada.
+        # Removido em 2026-09-10 junto com o subsistema de "motor de imagem"
+        # (ImageEngineState, pending_image_engine_confirmation, endpoint de
+        # confirmacao), que so existia para servir esse caminho.
+        #
+        # O status nao e' `generating_description` nem `publishing`: os guards
+        # das tasks seguintes pulam e a chain de lote morre em silencio. A
+        # retomada (beat a cada 15 min, ou endpoint manual) reentra por aqui.
+        from app.services.raw_photo_standby_service import (
+            PENDING_RAW_PHOTOS,
+            missing_photos_message,
         )
 
-        engine = get_engine_instance(engine_state.current_engine)
-        source_label = engine_state.current_engine
-
-        try:
-            raw_images = await engine.generate(prompt)
-        except ImageEngineUnavailableError as exc:
-            engine_state.last_openai_error = str(exc)[:500]
-            await db.commit()
-            listing.failed_step = listing.status
-            listing.status = "pending_image_engine_confirmation"
-            listing.error_message = str(exc)[:500]
-            await db.commit()
-            return {"listing_id": listing_id, "pending_image_engine_confirmation": True}
-
-        ml_pic = MLPictureService()
-        saved = 0
-        requires_white_bg = await _resolve_requires_white_bg(listing)
-
-        for img_bytes in raw_images:
-            prepared, verdict = _prepare_image_for_upload(
-                img_bytes, requires_white_bg=requires_white_bg and saved == 0
-            )
-            if prepared is None:
-                db.add(ListingImage(
-                    listing_id=listing.id,
-                    status="validation_failed",
-                    validation_error=verdict.reason,
-                    sort_order=saved,
-                ))
-                continue
-
-            ml_picture_id = await ml_pic.upload(prepared, access_token)
-
-            db.add(ListingImage(
-                listing_id=listing.id,
-                ml_picture_id=ml_picture_id,
-                status="uploaded",
-                sort_order=saved,
-            ))
-
-            # Registra no índice SKU→imagem (não aprovada ainda)
-            if sku:
-                db.add(ProductImage(
-                    seller_id=listing.seller_id,
-                    sku=sku,
-                    ml_picture_id=ml_picture_id,
-                    source=source_label,
-                    is_approved=False,
-                ))
-
-            saved += 1
-
-        if saved == 0:
-            raise RuntimeError(f"Nenhuma imagem válida foi gerada pelo motor '{source_label}'")
-
-        if listing.created_via == "batch":
-            # Auto-aprovar todas as imagens geradas e suas entradas no índice SKU→imagem.
-            # Mesma exclusão de candidatos do ramo i2i acima, pelo mesmo motivo:
-            # `cover_ai`/`specs_ai` também ficam em status "uploaded" e só podem
-            # ser aprovados por ação humana explícita (`promote_cover`).
-            images = (await db.execute(
-                select(ListingImage)
-                .options(defer(ListingImage.image_bytes))
-                .where(
-                    ListingImage.listing_id == listing.id,
-                    ListingImage.status == "uploaded",
-                    ListingImage.kind.notin_(CANDIDATE_KINDS),
-                )
-            )).scalars().all()
-            for img in images:
-                # Mesmo guard redundante do ramo i2i, pelo mesmo motivo.
-                if img.kind in CANDIDATE_KINDS:
-                    continue
-                img.approved = True
-            if sku:
-                prod_imgs = (await db.execute(
-                    select(ProductImage).where(
-                        ProductImage.seller_id == listing.seller_id,
-                        ProductImage.sku == sku,
-                    )
-                )).scalars().all()
-                for pi in prod_imgs:
-                    pi.is_approved = True
-            listing.status = "generating_description"
-            await db.commit()
-        else:
-            listing.status = "pending_image_approval"
-            await db.commit()
-
-    return {"listing_id": listing_id, "images_saved": saved}
+        listing.status = PENDING_RAW_PHOTOS
+        listing.error_message = missing_photos_message(sku or "?")
+        await db.commit()
+        logger.warning(
+            "raw_photos_standby listing_id=%s sku=%s result=aguardando_fotos",
+            listing.id, sku,
+        )
+        return {"listing_id": listing_id, "pending_raw_photos": True}
 
 
 async def _mark_failed(listing_id: str, error: str) -> None:
@@ -641,16 +552,10 @@ def generate_images(self, listing_id: str) -> dict:
     try:
         return asyncio.run(_generate_images_async(listing_id))
     except Exception as exc:
-        from app.services.image_engines.base import ImageRateLimitError
-        countdown = (
-            60 * (2 ** self.request.retries)   # 60s, 120s — muito mais longo para 429
-            if isinstance(exc, ImageRateLimitError)
-            else 2 ** self.request.retries * 5  # 5s, 10s — erros comuns
-        )
         if self.request.retries >= self.max_retries:
             asyncio.run(_mark_failed(listing_id, str(exc)))
             raise
-        raise self.retry(exc=exc, countdown=countdown)
+        raise self.retry(exc=exc, countdown=2 ** self.request.retries * 5)  # 5s, 10s
 
 
 @celery_app.task(name="app.workers.tasks.image_tasks.upload_images_to_ml", bind=True, max_retries=3)

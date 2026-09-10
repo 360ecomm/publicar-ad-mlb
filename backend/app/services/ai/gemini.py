@@ -7,7 +7,6 @@ from app.services.ai.cost_log import log_ai_cost
 from app.services.ai.prompts import (
     build_title_prompt,
     build_description_prompt,
-    build_image_prompt_request,
     build_card_copy_prompt,
 )
 
@@ -102,10 +101,6 @@ class GeminiProvider(AIProvider):
         return await self._call(
             prompt, max_tokens=4000, temperature=0.6, thinking=False, task="description"
         )
-
-    async def generate_image_prompt(self, brand: str, title: str, description: str) -> str:
-        prompt = build_image_prompt_request(brand, title, description)
-        return (await self._call(prompt, max_tokens=200, temperature=0.3, task="image_prompt")).strip()
 
     async def generate_card_copy(self, source: dict) -> dict:
         prompt = build_card_copy_prompt(source)

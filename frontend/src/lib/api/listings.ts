@@ -92,13 +92,10 @@ export async function generateImages(id: string): Promise<ListingSummary> {
   )
 }
 
-export async function confirmImageEngine(
-  id: string,
-  action: "use_gemini" | "retry_openai"
-): Promise<ListingSummary> {
+export async function resumeRawPhotos(id: string): Promise<ListingSummary> {
   return apiFetch<ListingSummary>(
-    `/api/v1/listings/${id}/pipeline/confirm_image_engine`,
-    { method: "POST", body: JSON.stringify({ action }) }
+    `/api/v1/listings/${id}/pipeline/resume_raw_photos`,
+    { method: "POST" }
   )
 }
 

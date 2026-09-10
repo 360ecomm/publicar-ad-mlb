@@ -12,7 +12,7 @@ class TestGenerateDescriptionIdempotency:
     @pytest.mark.asyncio
     async def test_skips_when_status_not_generating_description(self):
         """Guard defends against a Celery chain proceeding past a pause
-        (e.g. pending_image_engine_confirmation) set by the previous link
+        (e.g. pending_raw_photos) set by the previous link
         without raising — the chain still advances since the task returned
         normally, so this step must no-op instead of overwriting the pause."""
         from app.workers.tasks.ai_tasks import _generate_description_async

@@ -5,7 +5,6 @@ from app.services.ai.base import AIProvider
 from app.services.ai.prompts import (
     build_title_prompt,
     build_description_prompt,
-    build_image_prompt_request,
     build_card_copy_prompt,
 )
 
@@ -52,10 +51,6 @@ class ClaudeProvider(AIProvider):
     async def generate_description(self, listing_data: dict) -> str:
         prompt = build_description_prompt(listing_data)
         return await self._call(prompt, max_tokens=2000, temperature=0.6)
-
-    async def generate_image_prompt(self, brand: str, title: str, description: str) -> str:
-        prompt = build_image_prompt_request(brand, title, description)
-        return (await self._call(prompt, max_tokens=200, temperature=0.3)).strip()
 
     async def generate_card_copy(self, source: dict) -> dict:
         from app.services.ai.gemini import _extract_json

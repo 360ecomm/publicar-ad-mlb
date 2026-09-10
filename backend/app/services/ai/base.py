@@ -28,10 +28,6 @@ class AIProvider(ABC):
         """Retorna HTML string"""
 
     @abstractmethod
-    async def generate_image_prompt(self, brand: str, title: str, description: str) -> str:
-        """Retorna prompt em inglês otimizado para Imagen 4"""
-
-    @abstractmethod
     async def generate_card_copy(self, source: dict) -> dict:
         """Copy dos 3 cards de imagem. Recebe o dicionario montado por
         `image_card_copy_service._build_source()` e devolve

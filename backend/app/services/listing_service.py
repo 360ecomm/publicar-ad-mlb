@@ -274,57 +274,25 @@ class ListingService:
         from app.workers.tasks.image_tasks import generate_images
         generate_images.delay(str(listing.id))
 
-    async def confirm_image_engine(self, listing: Listing, action: str) -> None:
-        if listing.status != "pending_image_engine_confirmation":
+    async def resume_raw_photos(self, listing: Listing) -> None:
+        """Retomada MANUAL de `pending_raw_photos`, sem esperar o beat.
+
+        Mesma logica da tarefa periodica (`try_resume_raw_photos`): sonda o
+        bucket e, se as fotos minimas existem, reentra em `generate_images`.
+        Se ainda faltam, 409 dizendo quais arquivos sao obrigatorios.
+        """
+        from app.services import raw_photo_standby_service as standby
+
+        if listing.status != standby.PENDING_RAW_PHOTOS:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Confirmação de motor de imagem indisponível no status '{listing.status}'",
+                detail=f"Retomada por fotos brutas indisponível no status '{listing.status}'",
             )
-        if action not in ("use_gemini", "retry_openai"):
+        if not await standby.try_resume_raw_photos(self.db, listing):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="action deve ser 'use_gemini' ou 'retry_openai'",
+                status_code=status.HTTP_409_CONFLICT,
+                detail=standby.missing_photos_message(listing.sku_external_id or "?"),
             )
-
-        from app.workers.tasks.image_tasks import generate_images
-
-        def _redispatch(listing_obj: Listing) -> None:
-            # Anúncios batch precisam da chain completa (imagens → descrição →
-            # publicação) para que o pipeline continue automaticamente após o
-            # retry, igual ao dispatch original. Anúncios manuais pausam em
-            # cada etapa por design, então um .delay() avulso basta.
-            if listing_obj.created_via == "batch":
-                from celery import chain as celery_chain
-                from app.workers.tasks.image_tasks import generate_images as gi
-                from app.workers.tasks.ai_tasks import generate_description
-                from app.workers.tasks.publish_tasks import publish_listing
-                celery_chain(
-                    gi.si(str(listing_obj.id)),
-                    generate_description.si(str(listing_obj.id)),
-                    publish_listing.si(str(listing_obj.id)),
-                ).delay()
-            else:
-                generate_images.delay(str(listing_obj.id))
-
-        if action == "use_gemini":
-            from app.models.image_engine_state import ImageEngineState
-            engine_state = (await self.db.execute(select(ImageEngineState))).scalar_one()
-            engine_state.current_engine = "gemini"
-
-            pending = (await self.db.execute(
-                select(Listing).where(Listing.status == "pending_image_engine_confirmation")
-            )).scalars().all()
-            for pending_listing in pending:
-                pending_listing.status = "generating_images"
-                pending_listing.error_message = None
-            await self.db.commit()
-            for pending_listing in pending:
-                _redispatch(pending_listing)
-        else:
-            listing.status = "generating_images"
-            listing.error_message = None
-            await self.db.commit()
-            _redispatch(listing)
 
     async def approve_images(
         self, listing: Listing, approved_ids: list[UUID], review_seconds: int | None = None
