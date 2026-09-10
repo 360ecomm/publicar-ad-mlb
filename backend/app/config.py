@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     r2_bucket_name: str = "publicar-ad-mlb"
     r2_public_url: str = ""
 
+    # Bucket R2 DEDICADO para as imagens geradas por IA (write-back). Distinto
+    # do bucket de fotos brutas dos sellers (so leitura publica, em
+    # SellerImageConfig.raw_base_url). Vazio = desligado: a geracao continua,
+    # mas as linhas nascem com asset_key=None e o log avisa.
+    r2_asset_bucket_name: str = ""
+    r2_asset_bucket_endpoint: str = ""
+    r2_asset_bucket_access_key_id: str = ""
+    r2_asset_bucket_secret_access_key: str = ""
+
     # URL do frontend. Vazia enquanto nao houver frontend em producao: nesse
     # caso o callback do OAuth devolve JSON em vez de redirecionar para uma
     # tela que nao existe. Quando o frontend subir, basta definir a variavel.

@@ -12,15 +12,11 @@ async def write_back_images(db, listing, seller_image_config, access_token: str)
     ListingImage.r2_write_status, e a publicação (que já aconteceu antes
     desta função rodar) nunca é revertida por causa disso."""
     from sqlalchemy import select
-    from sqlalchemy.orm import defer
     from app.models.listing_image import ListingImage
 
-    # `defer(image_bytes)`: o write-back baixa os bytes do CDN do ML de novo,
-    # nunca usa os que estao no banco.
     images = (
         await db.execute(
             select(ListingImage)
-            .options(defer(ListingImage.image_bytes))
             .where(
                 ListingImage.listing_id == listing.id, ListingImage.approved == True
             )

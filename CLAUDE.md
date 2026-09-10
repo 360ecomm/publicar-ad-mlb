@@ -152,7 +152,8 @@ Chaves relevantes:
 - `GEMINI_API_KEY` — usado só para Gemini Flash (texto). O Imagen 4 (texto-imagem) foi removido em 2026-09-10
 - `GEMINI_MODEL` — modelo de texto (ex: `gemini-2.0-flash`)
 - `ANTHROPIC_API_KEY` (se usar Claude como provider)
-- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` — Cloudflare R2 (configurado mas não usado no pipeline de imagens atualmente)
+- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` — Cloudflare R2 legado (configurado mas não usado)
+- `R2_ASSET_BUCKET_NAME`, `R2_ASSET_BUCKET_ENDPOINT`, `R2_ASSET_BUCKET_ACCESS_KEY_ID`, `R2_ASSET_BUCKET_SECRET_ACCESS_KEY` — bucket R2 **dedicado** para as imagens geradas por IA (write-back na geração, `services/r2_asset_service.py`). Distinto do bucket de fotos brutas dos sellers. Vazio = a geração continua, mas as linhas nascem com `asset_key=None` e o log avisa. O banco **não guarda mais blob**: `ListingImage.asset_key` aponta para `{seller_id}/{sku}/{listing_id}/{kind}-{token}.jpg`
 
 - `ENVIRONMENT` — **default inseguro**: enquanto o valor for `development`, o
   `main.py` publica `/docs` **e** `/openapi.json`. Todo ambiente que não for dev
@@ -440,6 +441,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_batch_chain.py` — `TestCategoryTaskChainDispatch` (3), `TestSubmitAttributesChainDispatch` (1), `TestRemovedInternalDispatch` (2)
 - `test_image_card_copy_service.py` — saneamento da copy, denylist de conteúdo (true positives + **13 casos de falso positivo**: `12V`, `3,5cm`, `500ml`, `12,50 m`, `99,9%`, `5000mAh`…)
 - `test_perfil_padrao.py` — `PERFIL_PADRAO` para categoria sem perfil próprio, nunca None, roteamento para as 5 posições, nunca auto-aprova em lote
+- `test_r2_asset_store.py` — bucket R2 de ativos: chave por seller/sku/listing/kind, put/get via boto3, sem credencial não levanta, `_salvar_posicao` grava aprovada (bytes preparados) e reprovada (bytes crus), model sem `image_bytes`
 - `test_ml_oauth_state.py` — state do OAuth no Redis (incluindo o cenário "inicia num worker, completa em outro") e destino pós-callback com/sem `FRONTEND_URL`
 - `test_cover_variant.py` / `test_cover_promote.py` — Frente A: capa sempre branca, prompt rico dormant, candidato reprovado guarda os bytes, promoção idempotente e autocurável
 - `test_specs_variant.py` / `test_specs_promote.py` — Frente B: ficha sem título, promoção lendo o slot da galeria em vez de cravar número
@@ -457,7 +459,11 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - *(várias)* — multi-account, batch_import, product_images, products
 - `d3aa35ba6d71` — `products.model` + `listings.sku_model` + fix índices
 - `c1d5e8b3a207` — `validation_error` em `listing_images`
-- `2f769b55c74e` — `image_bytes` + `review_seconds` em `listing_images` (head atual)
+- `2f769b55c74e` — `image_bytes` + `review_seconds` em `listing_images`
+- `9c4d2e7f1a55` — drop de `image_engine_state` (subsistema de motor de imagem removido)
+- `3d8f1b2c9e47` — índices únicos parciais dos slots de capa e ficha (`uq_listing_images_cover_slot` / `_specs_slot`)
+- `5a1c7e2d9b04` — `listing_images.asset_key` (referência dos bytes no bucket R2 de ativos)
+- `7b2d9f4e1c58` — drop de `listing_images.image_bytes` (head atual). **Só rodar depois de** `scripts/migrate_image_bytes_to_r2.py` e de backup da tabela
 
 ---
 
