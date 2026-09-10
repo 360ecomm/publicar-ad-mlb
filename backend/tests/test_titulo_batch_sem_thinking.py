@@ -87,3 +87,21 @@ class TestTituloBatchSemThinking:
 
         with pytest.raises(RuntimeError, match="vazio"):
             await _gerar(mock_post, batch_mode=True)
+
+
+class TestTetoDeTokensNoLote:
+    @pytest.mark.asyncio
+    async def test_lote_tem_teto_de_2000_com_thinking_desligado(self):
+        """`thinkingBudget: 0` e' MELHOR ESFORCO no gemini-3.8-flash: na
+        amostragem de 2026-09-10, 1 em 4 chamadas de titulo veio com
+        thoughtSignature e 366+ tokens de thought mesmo com budget zero, e uma
+        delas estourou o teto de 500 (finish=MAX_TOKENS). Teto de 2000 com
+        budget zero: custa zero thought quando o modelo obedece e sai inteiro
+        quando nao obedece. A trava de MAX_TOKENS continua como rede."""
+        mock_post = AsyncMock(return_value=_resposta('{"title": "Martin Colônia 100ml Wepink"}', "STOP"))
+
+        await _gerar(mock_post, batch_mode=True)
+
+        cfg = _generation_config(mock_post)
+        assert cfg["maxOutputTokens"] >= 2000
+        assert cfg["thinkingConfig"] == {"thinkingBudget": 0}

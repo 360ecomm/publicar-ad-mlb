@@ -65,13 +65,16 @@ class GeminiProvider(AIProvider):
             technical_reference=technical_reference, vehicle_application=vehicle_application,
             color=color, size=size, capacity=capacity, material=material, gender=gender,
         )
-        # Batch: 1 titulo, saida curta, thinking DESLIGADO. O modelo por tras
-        # de `gemini-flash-latest` gastava os 500 tokens pensando e a resposta
-        # chegava cortada (finish=MAX_TOKENS, 482 tokens de thought, 14 de
-        # texto); com thinkingBudget=0 o mesmo prompt sai inteiro em 19 tokens.
-        # Mais barato e mais confiavel que subir o orcamento com thinking ligado.
+        # Batch: 1 titulo, saida curta, thinking DESLIGADO (thinkingBudget=0).
+        # Com o teto antigo de 500, o modelo gastava o orcamento pensando e a
+        # resposta chegava cortada (finish=MAX_TOKENS, 482 de thought, 14 de
+        # texto). Budget zero resolve NA MAIORIA das vezes — mas e' melhor
+        # esforco no gemini-3.8-flash: na amostragem de 2026-09-10, 1 em 4
+        # chamadas veio com thoughtSignature e 366+ tokens de thought mesmo
+        # assim, e uma estourou os 500. Por isso o teto e' 2000 nos dois modos:
+        # custa zero thought quando o modelo obedece, e sai inteiro quando nao.
         text = await self._call(
-            prompt, max_tokens=500 if batch_mode else 2000, temperature=0.6,
+            prompt, max_tokens=2000, temperature=0.6,
             thinking=not batch_mode, task="title",
         )
         parsed = json.loads(_extract_json(text))
