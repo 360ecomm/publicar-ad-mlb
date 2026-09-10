@@ -89,6 +89,11 @@ REGRAS OBRIGATÓRIAS:
 - Não use: pontuação desnecessária, maiúsculas em excesso, artigos (o, a, os, as)
 - Palavras PROIBIDAS pelo ML: Melhor, Promoção, Oferta, Barato, Grátis, Desconto
 - Máximo de informação útil no mínimo de palavras
+- PRESERVE no título TODA palavra de tipo de produto (categoria comercial) que \
+estiver na Descrição do ERP — ex.: Perfume, Colônia, Body Splash, Desodorante, \
+Creme, Sabonete. Essas palavras decidem a categoria do anúncio: NUNCA omita uma \
+delas por economia de caracteres (corte outra coisa antes). Não invente tipo de \
+produto que não esteja na origem.
 {extra_rules_line}
 PRODUTO:
 Descrição do ERP: {sku_description}
