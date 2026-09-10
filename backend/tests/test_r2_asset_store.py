@@ -38,13 +38,26 @@ class TestChaveEConfig:
         assert k == "CAFE085/37/cover_ai-20260910-234512-ab12.jpg"
 
     def test_duas_chaves_no_mesmo_segundo_nao_colidem(self):
+        """O sufixo de 4 hex desempata o mesmo segundo. Deterministico: o
+        sorteio e' patchado, porque 200 sorteios reais em 65.536 valores
+        colidem em ~30% das rodadas (aniversario) — o cenario real e' uma
+        retentativa do MESMO kind no mesmo segundo, 2 ou 3 sorteios."""
         from datetime import datetime, timezone
+        from itertools import cycle
         from app.services.r2_asset_service import asset_key_for
 
         quando = datetime(2026, 9, 10, 23, 45, 12, tzinfo=timezone.utc)
-        chaves = {asset_key_for(seller_slug="CAFE085", sku="37", kind="cover_ai", when=quando) for _ in range(200)}
-        assert len(chaves) == 200
-        assert all(c.startswith("CAFE085/37/cover_ai-20260910-234512-") for c in chaves)
+        sufixos = cycle(["a1b2", "c3d4", "e5f6"])
+        with patch("app.services.r2_asset_service.secrets.token_hex", side_effect=lambda n: next(sufixos)) as tok:
+            chaves = [asset_key_for(seller_slug="CAFE085", sku="37", kind="cover_ai", when=quando) for _ in range(3)]
+
+        assert tok.call_args_list[0].args == (2,), "4 hex = 2 bytes"
+        assert chaves == [
+            "CAFE085/37/cover_ai-20260910-234512-a1b2.jpg",
+            "CAFE085/37/cover_ai-20260910-234512-c3d4.jpg",
+            "CAFE085/37/cover_ai-20260910-234512-e5f6.jpg",
+        ]
+        assert len(set(chaves)) == 3
 
     def test_ordem_cronologica_pelo_nome(self):
         from datetime import datetime, timezone, timedelta
