@@ -12,6 +12,7 @@ async def _process_batch_async(batch_id: str) -> dict:
     from app.models.listing import Listing
     from app.models.product import Product
     from app.services.batch_import_service import normalize_row, validate_row
+    from app.services.brand_field import real_brand
 
     async with worker_session() as db:
         batch = (
@@ -68,7 +69,10 @@ async def _process_batch_async(batch_id: str) -> dict:
                     # Desnormalizados do produto (fase 1 — preserva compatibilidade com pipeline)
                     sku_external_id=product.sku,
                     sku_description=product.description,
-                    sku_brand=product.brand or "Sem marca",
+                    # Vazio quando nao ha marca (coluna NOT NULL). NUNCA o
+                    # placeholder "Sem marca": ele vazava para o prompt de
+                    # apresentacao e saia impresso na imagem (SKU 45).
+                    sku_brand=real_brand(product.brand) or "",
                     sku_model=product.model or None,
                     package_weight_kg=product.weight_kg,
                     package_length_cm=product.length_cm,

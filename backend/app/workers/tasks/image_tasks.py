@@ -249,6 +249,7 @@ async def _campos_das_posicoes(db, listing):
     from sqlalchemy import select
 
     from app.models.listing_attribute import ListingAttribute
+    from app.services.brand_field import real_brand
     from app.services.image_card_copy_service import build_specs_card, generate_card_copy
 
     atributos = (await db.execute(
@@ -265,7 +266,9 @@ async def _campos_das_posicoes(db, listing):
 
     return {
         "nome": (listing.sku_model or listing.sku_description or "").strip(),
-        "marca": (listing.sku_brand or "").strip() or None,
+        # `real_brand`: placeholder ("Sem marca") vira None e a linha 2 da
+        # apresentacao e' OMITIDA — no SKU 45 ela saiu impressa na imagem.
+        "marca": real_brand(listing.sku_brand),
         "volume": volume,
         "beneficios": beneficios,
         "ficha": ficha,
