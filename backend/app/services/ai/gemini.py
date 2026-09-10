@@ -94,7 +94,14 @@ class GeminiProvider(AIProvider):
 
     async def generate_description(self, listing_data: dict) -> str:
         prompt = build_description_prompt(listing_data)
-        return await self._call(prompt, max_tokens=2000, temperature=0.6, task="description")
+        # Preventivo, mesma classe do bug do titulo e do card. Sonda com a
+        # descricao real do T38 (budget 0, 5x): saida de 531-603 tokens,
+        # thought 0. Teto 4000 e nao 2000 porque o budget 0 e' melhor esforco
+        # no gemini-3.8-flash: um thought escapado (ja medido em 1125-1467
+        # tokens) somado a saida de ~600 nao cabe em 2000.
+        return await self._call(
+            prompt, max_tokens=4000, temperature=0.6, thinking=False, task="description"
+        )
 
     async def generate_image_prompt(self, brand: str, title: str, description: str) -> str:
         prompt = build_image_prompt_request(brand, title, description)

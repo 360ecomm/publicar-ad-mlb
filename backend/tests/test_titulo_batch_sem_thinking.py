@@ -126,3 +126,23 @@ class TestCardCopySemThinking:
         cfg = _generation_config(mock_post)
         assert cfg["thinkingConfig"] == {"thinkingBudget": 0}
         assert cfg["maxOutputTokens"] >= 2000
+
+
+class TestDescricaoSemThinking:
+    @pytest.mark.asyncio
+    async def test_descricao_desliga_thinking_e_tem_teto_de_4000(self):
+        """Preventivo, mesma classe do titulo e do card. Sonda de 2026-09-10
+        com a descricao real do T38, budget 0, 5x: saida entre 531 e 603
+        tokens, thought 0. Teto 4000 porque o budget 0 e' melhor esforco e um
+        thought escapado (ja visto em 1125-1467 tokens) somado a saida de ~600
+        nao cabe em 2000."""
+        mock_post = AsyncMock(return_value=_resposta("<p>desc</p>", "STOP"))
+
+        with patch("httpx.AsyncClient") as cls:
+            cls.return_value.__aenter__.return_value.post = mock_post
+            await GeminiProvider().generate_description({"selected_title": "t", "sku_brand": "b",
+                                                         "sku_description": "d", "condition": "new", "attributes": []})
+
+        cfg = _generation_config(mock_post)
+        assert cfg["thinkingConfig"] == {"thinkingBudget": 0}
+        assert cfg["maxOutputTokens"] >= 4000
