@@ -3,6 +3,7 @@ import re
 import httpx
 from app.config import get_settings
 from app.services.ai.base import AIProvider
+from app.services.ai.cost_log import log_ai_cost
 from app.services.ai.prompts import (
     build_title_prompt,
     build_description_prompt,
@@ -71,7 +72,7 @@ class GeminiProvider(AIProvider):
         # Mais barato e mais confiavel que subir o orcamento com thinking ligado.
         text = await self._call(
             prompt, max_tokens=500 if batch_mode else 2000, temperature=0.6,
-            thinking=not batch_mode,
+            thinking=not batch_mode, task="title",
         )
         parsed = json.loads(_extract_json(text))
         if not isinstance(parsed, dict):
@@ -90,29 +91,35 @@ class GeminiProvider(AIProvider):
 
     async def generate_description(self, listing_data: dict) -> str:
         prompt = build_description_prompt(listing_data)
-        return await self._call(prompt, max_tokens=2000, temperature=0.6)
+        return await self._call(prompt, max_tokens=2000, temperature=0.6, task="description")
 
     async def generate_image_prompt(self, brand: str, title: str, description: str) -> str:
         prompt = build_image_prompt_request(brand, title, description)
-        return (await self._call(prompt, max_tokens=200, temperature=0.3)).strip()
+        return (await self._call(prompt, max_tokens=200, temperature=0.3, task="image_prompt")).strip()
 
     async def generate_card_copy(self, source: dict) -> dict:
         prompt = build_card_copy_prompt(source)
-        text = await self._call(prompt, max_tokens=1200, temperature=0.4)
+        text = await self._call(prompt, max_tokens=1200, temperature=0.4, task="card_copy")
         parsed = json.loads(_extract_json(text))
         if not isinstance(parsed, dict):
             raise RuntimeError(f"Gemini não retornou um JSON de card válido: {text[:300]!r}")
         return parsed
 
     async def _call(
-        self, prompt: str, max_tokens: int, temperature: float, thinking: bool = True
+        self, prompt: str, max_tokens: int, temperature: float, thinking: bool = True,
+        task: str = "unknown",
     ) -> str:
         url = _BASE.format(model=self.settings.gemini_model)
         generation_config: dict = {"temperature": temperature, "maxOutputTokens": max_tokens}
         if not thinking:
-            # `thinkingBudget: 0` desliga o raciocinio no gemini-2.5-flash (o
-            # que o alias `gemini-flash-latest` resolve hoje). `thinkingLevel`
-            # e' da familia 3 e este modelo recusa com 400.
+            # `thinkingBudget: 0` desliga o raciocinio no gemini-3.8-flash:
+            # sonda com o prompt real deu finish=STOP e ZERO tokens de thought.
+            # A doc da familia 3.x diz que `thinkingBudget` "nao e' mais
+            # recomendado" em favor de `thinkingLevel`, mas o 3.8 Flash NAO
+            # aceita o nivel `minimal` (400 "not supported for this model") e
+            # `low` ainda gasta thought. O budget 0 segue sendo a unica forma
+            # de desligar de fato; se um modelo futuro o ignorar, a trava de
+            # MAX_TOKENS abaixo denuncia.
             generation_config["thinkingConfig"] = {"thinkingBudget": 0}
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -124,7 +131,20 @@ class GeminiProvider(AIProvider):
                 },
             )
         response.raise_for_status()
-        candidate = response.json()["candidates"][0]
+        body = response.json()
+        candidate = body["candidates"][0]
+        # Custo ANTES da validacao: o dinheiro foi gasto mesmo quando a
+        # resposta e' inutil. `modelVersion` e' o modelo que respondeu de fato,
+        # nao o nome pedido — e' como se descobre que um alias trocou por baixo.
+        usage = body.get("usageMetadata", {})
+        log_ai_cost(
+            provider="gemini", task=task,
+            model=body.get("modelVersion") or self.settings.gemini_model,
+            input_tokens=usage.get("promptTokenCount"),
+            output_tokens=usage.get("candidatesTokenCount"),
+            thought_tokens=usage.get("thoughtsTokenCount", 0),
+            total_tokens=usage.get("totalTokenCount"),
+        )
         # Resposta cortada NUNCA vira texto: o json_repair "consertava" o JSON
         # pela metade e o titulo truncado seguia adiante sem ninguem ver. Se o
         # orcamento voltar a ficar baixo demais (ou o alias trocar de modelo e

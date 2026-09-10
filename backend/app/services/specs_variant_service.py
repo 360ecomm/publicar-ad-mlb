@@ -115,6 +115,10 @@ async def generate_specs_variant(db, listing, access_token: str) -> ListingImage
     anuncio nao renderem `MIN_BULLETS` linhas de ficha — nos dois casos um
     request que nao pode ter sucesso nao deve chamar um motor pago.
     """
+    from app.services.ai.cost_log import set_cost_context
+
+    set_cost_context(listing_id=listing.id, sku=listing.sku_external_id)
+
     from app.services.image_card_copy_service import build_specs_card
     from app.services.image_engines.openai_edit_engine import OpenAIEditEngine
     from app.services.image_service import MLPictureService

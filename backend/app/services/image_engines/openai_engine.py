@@ -2,6 +2,7 @@ import base64
 import httpx
 
 from app.config import get_settings
+from app.services.ai.cost_log import log_ai_cost
 from app.services.image_engines.base import (
     ImageEngineProvider,
     ImageEngineUnavailableError,
@@ -44,7 +45,16 @@ class OpenAIImageEngine(ImageEngineProvider):
                 request=resp.request,
                 response=resp,
             )
-        data = resp.json().get("data", [])
+        body = resp.json()
+        data = body.get("data", [])
+        usage = body.get("usage") or {}
+        log_ai_cost(
+            provider="openai", task="image_generate", model=self.settings.openai_image_model,
+            images=len(data), size="1024x1024", quality="medium",
+            input_tokens=usage.get("input_tokens"),
+            output_tokens=usage.get("output_tokens"),
+            total_tokens=usage.get("total_tokens"),
+        )
         return [base64.b64decode(item["b64_json"]) for item in data]
 
 

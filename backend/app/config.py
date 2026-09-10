@@ -28,7 +28,16 @@ class Settings(BaseSettings):
     # IA
     ai_provider: str = "gemini"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-1.5-flash"
+    # NOME EXPLICITO, NUNCA ALIAS ("gemini-flash-latest", "-latest"). O alias e'
+    # trocado a quente pelo Google a cada release ("hot-swapped with each new
+    # release", ai.google.dev/gemini-api/docs/models). Em 2026-09 ele passou
+    # de um modelo sem thinking para o gemini-3.8-flash sem nenhuma mudanca
+    # nossa, e o titulo em lote quebrou (orcamento de 500 tokens consumido por
+    # thinking). Nao e' "atualizacao automatica gratis": e' mudanca de
+    # comportamento em producao sem commit. Trocar de modelo e' decisao
+    # deliberada, com deploy, testada com o prompt real. O `.env` de producao
+    # VENCE este default — conferir la tambem.
+    gemini_model: str = "gemini-3.8-flash"
     anthropic_api_key: str = ""
     claude_model: str = "claude-haiku-4-5-20251001"
 
