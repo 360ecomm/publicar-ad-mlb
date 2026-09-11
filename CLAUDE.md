@@ -377,7 +377,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `listing_title.py` — ListingTitle
 - `listing_attribute.py` — ListingAttribute (allowed_values JSONB, is_required, source)
 - `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order)
-- `listing_review_event.py` — ListingReviewEvent (listing_id, user_id, action, mode, approved_count, review_seconds, created_at) — 1 linha por aprovação humana de imagens, imutável (sem `updated_at`)
+- `listing_review_event.py` — ListingReviewEvent (listing_id, user_id, action, mode, approved_count, review_seconds, created_at) — 1 linha por aprovação humana de imagens, imutável (sem `updated_at`). Apaga junto com o listing (FK `ON DELETE CASCADE` + `cascade="all, delete-orphan"` em `Listing.review_events`); `user_id` não cascateia
 - `listing_description.py` — ListingDescription
 - `listing_job.py` — ListingJob
 - `product_image.py` — ProductImage (seller_id, sku, ml_picture_id, is_approved) — índice SKU→imagem. **Sem escrita nem leitura desde 2026-09-10**; fica como registro histórico dos SKUs 37/38 até decisão de apagar
@@ -449,8 +449,9 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_ml_replace_pictures.py` — substituição TOTAL de fotos: recusa lista vazia, ID repetido e perda de `must_keep`
 - `test_bulk_approve_por_posicao.py` — Postgres real (só com `TEST_DATABASE_URL`): `bulk_approve_images` aprova as 5 posições (0–4, inclusive `cover_ai`/`specs_ai` oficiais e a `cover_deterministic` de fallback) e deixa as candidatas 90/91 `approved=False` (2)
 
-> Suíte completa: **437 passed, 4 skipped** (2026-09-11). Os 4 pulados são os testes com Postgres real de `test_bulk_approve_por_posicao.py` e a corrida real de
-> `test_promocao_indice_unico.py`, que só roda com `TEST_DATABASE_URL` apontando para o banco
+> Suíte completa: **455 passed, 17 skipped** sem `TEST_DATABASE_URL`; **472 passed** com ela (2026-09-11). Os pulados são os testes
+> com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, os de migração e a corrida real de
+> `test_promocao_indice_unico.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
 > `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
 > Os testes reais fazem `drop_all`/`create_all` no `publicar_test` e são donos exclusivos dele — nunca rodar duas suítes (ou uma suíte e um arquivo avulso) contra ele ao mesmo tempo; a colisão aparece como `DBAPIError` em `DROP TABLE`.
@@ -468,7 +469,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `7b2d9f4e1c58` — drop de `listing_images.image_bytes`. **Só rodar depois de** `scripts/migrate_image_bytes_to_r2.py` e de backup da tabela
 - `8e3a5c1d7f92` — remove o write-back por seller (RF7): `seller_image_configs.write_*`, `listing_images.r2_write_status` e `url_r2`. Ver `docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md`
 - `9f4c2b7e1d63` — kind `presentation` → `presentation_ai` em `listing_images` (só dados, sem mudança de schema)
-- `b3e7a1c9d5f2` — cria `listing_review_events`
+- `b3e7a1c9d5f2` — cria `listing_review_events` (FK de `listing_id` com `ON DELETE CASCADE`)
 - `c8d2f6a4e1b7` — drop de `listing_images.review_seconds` (o tempo de revisão vive só no evento) (head atual)
 
 ---

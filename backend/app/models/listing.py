@@ -59,3 +59,6 @@ class Listing(Base, TimestampMixin):
     description: Mapped[Optional["ListingDescription"]] = relationship(
         "ListingDescription", back_populates="listing", uselist=False, cascade="all, delete-orphan"
     )
+    review_events: Mapped[list["ListingReviewEvent"]] = relationship(
+        "ListingReviewEvent", back_populates="listing", cascade="all, delete-orphan"
+    )

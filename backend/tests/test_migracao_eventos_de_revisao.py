@@ -9,7 +9,8 @@ abrir conexao).
 Ruling do teste: `Base.metadata.create_all` ja cria a tabela no estado do
 model atual, entao o "antes" da migracao e' produzido com `mig.downgrade()`
 (tabela some), depois `mig.upgrade()` (tabela volta, com as colunas e o
-indice `ix_listing_review_events_listing_id`), depois `mig.downgrade()` de
+indice `ix_listing_review_events_listing_id`, e a FK de `listing_id` com
+`ON DELETE CASCADE`), depois `mig.downgrade()` de
 novo (some outra vez) — prova que upgrade/downgrade sao reversiveis de
 verdade, nao so "roda sem erro".
 
@@ -94,6 +95,23 @@ def _indices(sync_conn, tabela):
     return {i["name"] for i in inspect(sync_conn).get_indexes(tabela)}
 
 
+def _ondelete_por_coluna(sync_conn, tabela):
+    """`{coluna_restrita: ondelete}` de cada FK de UMA coluna da tabela
+    (`None` quando a FK nao declara `ON DELETE`)."""
+    from sqlalchemy import inspect
+
+    return {
+        fk["constrained_columns"][0]: (fk.get("options") or {}).get("ondelete")
+        for fk in inspect(sync_conn).get_foreign_keys(tabela)
+        if len(fk["constrained_columns"]) == 1
+    }
+
+
+# `listing_id` apaga junto com o listing (mesmo padrao dos outros filhos de
+# `Listing`); `user_id` NAO: apagar um usuario nao pode sumir com auditoria.
+ONDELETE_ESPERADO = {"listing_id": "CASCADE", "user_id": None}
+
+
 @_precisa_db
 class TestRev1ListingReviewEvents:
     @pytest.mark.asyncio
@@ -105,7 +123,9 @@ class TestRev1ListingReviewEvents:
             # estado do model atual.
             async with engine.begin() as conn:
                 tabelas = await conn.run_sync(_tabelas)
+                fks_model = await conn.run_sync(_ondelete_por_coluna, "listing_review_events")
             assert "listing_review_events" in tabelas, tabelas
+            assert fks_model == ONDELETE_ESPERADO, fks_model
 
             # "Antes" da migracao: downgrade dropa a tabela.
             async with engine.begin() as conn:
@@ -119,9 +139,11 @@ class TestRev1ListingReviewEvents:
                 tabelas = await conn.run_sync(_tabelas)
                 colunas = await conn.run_sync(_colunas, "listing_review_events")
                 indices = await conn.run_sync(_indices, "listing_review_events")
+                fks_mig = await conn.run_sync(_ondelete_por_coluna, "listing_review_events")
             assert "listing_review_events" in tabelas, tabelas
             assert colunas == COLUNAS_ESPERADAS, colunas
             assert "ix_listing_review_events_listing_id" in indices, indices
+            assert fks_mig == ONDELETE_ESPERADO, fks_mig
 
             # Downgrade de novo: reversivel de verdade, nao so "roda sem erro".
             async with engine.begin() as conn:

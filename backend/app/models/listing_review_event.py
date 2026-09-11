@@ -3,7 +3,7 @@ from typing import Optional
 from uuid import uuid4
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 # --------------------------------------------------------------------------
@@ -40,8 +40,12 @@ class ListingReviewEvent(Base):
     __tablename__ = "listing_review_events"
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    # `ondelete="CASCADE"` no banco + `cascade="all, delete-orphan"` no
+    # relationship de `Listing`: o evento apaga junto com o listing
+    # (`DELETE /listings/{id}`, so draft/failed), como os outros filhos.
+    # `user_id` NAO cascateia: apagar um usuario nao pode sumir com auditoria.
     listing_id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("listings.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"), nullable=False, index=True
     )
     user_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     action: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -54,3 +58,5 @@ class ListingReviewEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    listing: Mapped["Listing"] = relationship("Listing", back_populates="review_events")

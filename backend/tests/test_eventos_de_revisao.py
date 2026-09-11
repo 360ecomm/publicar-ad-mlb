@@ -325,3 +325,78 @@ class TestEventoBulk:
             ]
         finally:
             await engine.dispose()
+
+
+async def _gravar_evento(session_maker, listing_id, user_id):
+    """Insere 1 evento direto na tabela — simula uma aprovacao ja feita, sem
+    passar por `approve_images` (o que esta em teste aqui e' a exclusao)."""
+    from app.models.listing_review_event import (
+        REVIEW_ACTION_IMAGES_APPROVED,
+        REVIEW_MODE_INDIVIDUAL,
+        ListingReviewEvent,
+    )
+
+    async with session_maker() as s:
+        s.add(ListingReviewEvent(
+            listing_id=listing_id, user_id=user_id, action=REVIEW_ACTION_IMAGES_APPROVED,
+            mode=REVIEW_MODE_INDIVIDUAL, approved_count=5, review_seconds=None,
+        ))
+        await s.commit()
+
+
+async def _listing_existe(session_maker, listing_id) -> bool:
+    from app.models.listing import Listing
+
+    async with session_maker() as s:
+        return (await s.execute(select(Listing.id).where(Listing.id == listing_id))).first() is not None
+
+
+@_precisa_db
+class TestEventosApagamJuntoComOListing:
+    """Um listing que ficou `failed` DEPOIS de uma aprovacao humana tem
+    evento de revisao. `DELETE /listings/{id}` (que so aceita draft/failed)
+    precisa apagar o listing e levar o evento junto — nunca estourar
+    violacao de FK. Mesmo padrao dos outros filhos de `Listing`
+    (imagens, titulos, atributos, jobs, descricao)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_do_service_apaga_listing_failed_e_o_evento_junto(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            user_id, seller_id = await _semear_user_e_seller(sm)
+            listing_id, _ = await _semear_listing(sm, seller_id, user_id, "failed", _linhas_padrao())
+            await _gravar_evento(sm, listing_id, user_id)
+            assert len(await _eventos(sm, listing_id)) == 1
+
+            async with sm() as s:
+                await ListingService(s, seller_id).delete(listing_id, seller_id)
+
+            assert await _listing_existe(sm, listing_id) is False
+            assert await _eventos(sm, listing_id) == []
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_delete_por_sql_apaga_o_evento_pela_fk_ondelete_cascade(self):
+        """A FK em si tem `ON DELETE CASCADE` no banco (nao so o cascade do
+        ORM): um DELETE que nao passe pelo ORM tambem nao pode ser barrado
+        pelo evento. Aqui as imagens ficam de fora de proposito — as FKs delas
+        nao tem `ondelete` e barrariam o DELETE cru por motivo alheio ao teste."""
+        from sqlalchemy import text
+
+        engine, sm = await _preparar_banco()
+        try:
+            user_id, seller_id = await _semear_user_e_seller(sm)
+            listing_id, _ = await _semear_listing(sm, seller_id, user_id, "failed", [])
+            await _gravar_evento(sm, listing_id, user_id)
+
+            async with sm() as s:
+                await s.execute(text("DELETE FROM listings WHERE id = :id"), {"id": listing_id})
+                await s.commit()
+
+            assert await _listing_existe(sm, listing_id) is False
+            assert await _eventos(sm, listing_id) == []
+        finally:
+            await engine.dispose()

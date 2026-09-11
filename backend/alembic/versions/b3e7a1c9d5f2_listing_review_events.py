@@ -5,7 +5,10 @@ modo, quantas imagens, quando. `approve_images`/`bulk_approve_images` gravam
 a linha na MESMA transacao da aprovacao — a tabela existir e' pre-requisito
 pra isso ser possivel. `review_seconds` e' NULL em modo `bulk` sempre (nunca
 estima/reparte tempo); em modo `individual` guarda o valor recebido do
-operador, que tambem pode ser None.
+operador, que tambem pode ser None. A FK de `listing_id` tem `ON DELETE
+CASCADE`: o evento apaga junto com o listing (`DELETE /listings/{id}`), como
+os outros filhos de `listings`; a de `user_id` nao — apagar um usuario nao
+pode sumir com auditoria.
 
 Revision ID: b3e7a1c9d5f2
 Revises: 9f4c2b7e1d63
@@ -31,7 +34,7 @@ def upgrade() -> None:
         sa.Column('approved_count', sa.Integer(), nullable=False),
         sa.Column('review_seconds', sa.Integer(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['listing_id'], ['listings.id']),
+        sa.ForeignKeyConstraint(['listing_id'], ['listings.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['user_id'], ['users.id']),
         sa.PrimaryKeyConstraint('id'),
     )
