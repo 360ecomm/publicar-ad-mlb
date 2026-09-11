@@ -123,7 +123,8 @@ async def _generate_images_async(listing_id: str) -> dict:
         # `generating_description` — sem gerar nada, sem o esquema de 5
         # posicoes e sem o guard de revisao humana. Removido em 2026-09-10:
         # todo listing SEMPRE gera as suas imagens. O indice SKU→imagem
-        # (`ProductImage`) continua sendo escrito, como registro, nao atalho.
+        # (`ProductImage`) nao e mais lido nem escrito desde entao; a tabela
+        # fica so como registro historico dos SKUs 37/38.
         seller = (
             await db.execute(select(Seller).where(Seller.id == listing.seller_id))
         ).scalar_one()
