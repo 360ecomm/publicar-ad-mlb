@@ -5,9 +5,11 @@ O que estes testes travam, em ordem de importancia:
 1. ROTEAMENTO por categoria-FOLHA. Categoria sem perfil segue o caminho
    antigo — e o que mantem a mudanca contida a perfumaria.
 2. NENHUMA aprovacao automatica, nem em batch. Revisao humana e obrigatoria
-   nas 5 posicoes; sem guard, o batch aprovaria as posicoes 2-4 e publicaria
-   um anuncio sem capa e sem ficha (essas duas sao CANDIDATE_KINDS e ficariam
-   de fora da varredura).
+   nas 5 posicoes; sem guard, o batch aprovaria imagens sem revisao. A
+   aprovacao em massa (`bulk_approve_images`) exclui candidatas pela POSICAO
+   (`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`), nunca pelo `kind` — as 5
+   posicoes oficiais, incluindo capa (0) e ficha (4), sao todas aprovadas
+   quando um humano aciona a aprovacao.
 3. INDEPENDENCIA: uma posicao que falha nao derruba as outras.
 4. Kits intocados.
 """

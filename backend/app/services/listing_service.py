@@ -8,7 +8,7 @@ from app.models.listing_title import ListingTitle
 from app.models.listing_attribute import ListingAttribute
 from app.models.listing_description import ListingDescription
 from app.models.listing_image import (
-    CANDIDATE_KINDS,
+    CANDIDATE_SORT_ORDER_FLOOR,
     COVER_SORT_ORDER,
     PROMOTABLE_COVER_KINDS,
     ListingImage,
@@ -486,16 +486,19 @@ class ListingService:
                 if not listing or listing.status != "pending_image_approval":
                     results.append(BulkItemResult(listing_id=lid, success=False, error="estado inválido"))
                     continue
-                # Candidatos gerados por IA sob demanda (`cover_ai`,
-                # `specs_ai`) ficam de fora: eles nascem `approved=False` de
-                # proposito e so viram capa por acao humana explicita
-                # (`promote_cover`). Aprovar em massa sem este filtro os
-                # colocaria no payload de fotos da publicacao, no ML real.
+                # Candidatas de IA sob demanda (sort_order >= CANDIDATE_SORT_ORDER_FLOOR)
+                # ficam de fora: elas nascem `approved=False` de proposito e
+                # so viram capa/ficha por acao humana explicita
+                # (`promote_cover`/`promote_specs`). O filtro e' por POSICAO,
+                # nao por `kind` — `cover_ai`/`specs_ai` sao os MESMOS kinds
+                # das posicoes oficiais 0 e 4, entao um filtro por kind
+                # deixaria a capa e a ficha oficiais de fora da aprovacao.
+                # Ver a docstring de `CANDIDATE_SORT_ORDER_FLOOR`.
                 await self.db.execute(
                     sa_update(ListingImage)
                     .where(
                         ListingImage.listing_id == lid,
-                        ListingImage.kind.notin_(CANDIDATE_KINDS),
+                        ListingImage.sort_order < CANDIDATE_SORT_ORDER_FLOOR,
                     )
                     .values(approved=True)
                     .execution_options(synchronize_session=False)

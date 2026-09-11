@@ -37,14 +37,6 @@ COVER_SORT_ORDER = 0
 # qualquer um dos dois lados reabre isso.
 PROMOTABLE_COVER_KINDS = frozenset({COVER_DETERMINISTIC_KIND, COVER_AI_KIND})
 
-# Candidatos gerados por IA SOB DEMANDA (Frentes A e B). Nascem
-# `approved=False` em sort_order 90/91 e so viram capa por acao humana
-# explicita. Toda aprovacao em massa (worker batch, bulk_approve_images) TEM
-# de exclui-los: aprovado + ml_picture_id e o filtro que monta o payload de
-# fotos da publicacao, entao um candidato aprovado por engano vai ao ar no
-# anuncio real.
-CANDIDATE_KINDS = frozenset({COVER_AI_KIND, SPECS_AI_KIND})
-
 CARD_SPECS_KIND = "card_specs"
 
 # Kinds que disputam o slot de ficha tecnica na galeria — o Pillow do pipeline
@@ -65,6 +57,21 @@ PROMOTABLE_SPECS_KINDS = frozenset({CARD_SPECS_KIND, SPECS_AI_KIND})
 # Fronteira entre a galeria publicavel e a area de candidatos (90/91). Serve
 # para responder "qual e a ultima posicao da galeria" sem confundir candidato
 # com imagem publicada.
+#
+# ESTA E' A DEFINICAO DE CANDIDATA: candidata e' quem tem
+# `sort_order >= CANDIDATE_SORT_ORDER_FLOOR`. O `kind` NAO distingue —
+# `cover_ai` e `specs_ai` sao gerados por IA SOB DEMANDA (Frentes A e B) em
+# sort_order 90/91, mas sao TAMBEM os kinds das posicoes oficiais 0 (capa) e 4
+# (ficha) do esquema de 5 posicoes. Um filtro por kind (`kind NOT IN
+# (cover_ai, specs_ai)`) deixaria a capa e a ficha oficiais de fora de
+# qualquer aprovacao em massa — foi exatamente o bug que este comentario
+# substitui.
+#
+# Candidatas nascem `approved=False` e so viram capa/ficha por acao humana
+# explicita (`promote_cover`/`promote_specs`). Toda aprovacao em massa (worker
+# batch, `bulk_approve_images`) TEM de exclui-las pela POSICAO: aprovado +
+# `ml_picture_id` e o filtro que monta o payload de fotos da publicacao,
+# entao uma candidata aprovada por engano vai ao ar no anuncio real.
 CANDIDATE_SORT_ORDER_FLOOR = 90
 
 

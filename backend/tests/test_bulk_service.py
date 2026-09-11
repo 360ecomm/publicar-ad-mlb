@@ -208,11 +208,12 @@ async def test_bulk_publish_transitions_and_dispatches():
 
 
 @pytest.mark.asyncio
-async def test_bulk_approve_images_never_approves_ai_candidates():
-    """`bulk_approve_images` faz um UPDATE em massa por `listing_id`. Sem
-    filtro de `kind` ele aprovaria tambem os candidatos `cover_ai`/`specs_ai`
-    (que nascem `approved=False` e so viram capa por `promote_cover`), e
-    imagem aprovada com `ml_picture_id` entra no payload de publicacao no ML.
+async def test_bulk_approve_images_exclui_candidatas_por_posicao_nao_por_kind():
+    """`bulk_approve_images` faz um UPDATE em massa por `listing_id`. Candidata
+    e' quem tem `sort_order >= CANDIDATE_SORT_ORDER_FLOOR` (90/91) — o `kind`
+    NAO distingue, porque `cover_ai`/`specs_ai` sao tambem os kinds das
+    posicoes oficiais 0 e 4. Um filtro por `kind` deixaria a capa (0) e a
+    ficha (4) oficiais, que usam os MESMOS kinds, de fora da aprovacao.
 
     O UPDATE e emitido direto no banco (nao ha objeto ORM em memoria pra
     inspecionar), entao a asserção é sobre o SQL que a sessão recebeu."""
@@ -234,4 +235,5 @@ async def test_bulk_approve_images_never_approves_ai_candidates():
 
     update_sql = str(statements[1])
     assert "UPDATE listing_images" in update_sql, update_sql
-    assert "listing_images.kind NOT IN" in update_sql, update_sql
+    assert "listing_images.sort_order <" in update_sql, update_sql
+    assert "listing_images.kind" not in update_sql, update_sql
