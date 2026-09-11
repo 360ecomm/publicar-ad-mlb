@@ -248,7 +248,7 @@ async def _my_task_async(listing_id: str) -> dict:
 ```
 
 ### Batch dispatch atômico (SPEC-012)
-Nos gatilhos batch (`category_tasks.py`, `listing_service.submit_attributes`), a transição de status e o dispatch são feitos atomicamente:
+Nos gatilhos batch (`category_tasks.py`, `listing_service.submit_attributes`, `listing_service.bulk_generate_images`, `raw_photo_standby_service`), a transição de status e o dispatch são feitos atomicamente:
 ```python
 from sqlalchemy import update as sa_update
 result = await db.execute(
@@ -259,18 +259,11 @@ result = await db.execute(
 )
 await db.commit()
 if result.rowcount == 1:
-    from celery import chain as celery_chain
     from app.workers.tasks.image_tasks import generate_images
-    from app.workers.tasks.ai_tasks import generate_description
-    from app.workers.tasks.publish_tasks import publish_listing
-    celery_chain(
-        generate_images.si(listing_id),
-        generate_description.si(listing_id),
-        publish_listing.si(listing_id),
-    ).delay()
+    generate_images.delay(listing_id)
 ```
 - `rowcount == 0` → outro worker ganhou a race condition, não despacha nada
-- `.si()` (não `.s()`) — tasks não passam resultado para o próximo step
+- **Só `generate_images` é despachado.** O listing para em `pending_image_approval` até um humano aprovar as imagens; `generate_description` só é disparado por `approve_images`/`bulk_approve_images` e termina em `ready_to_publish`. `publish_listing` **nunca** é enfileirado por caminho automático — só por `trigger_publish` (`pipeline/publish`) e `bulk_publish` (`bulk/publish`), em lote também
 - `execution_options(synchronize_session=False)` obrigatório no async SQLAlchemy
 
 ### Idempotência em workers batch
