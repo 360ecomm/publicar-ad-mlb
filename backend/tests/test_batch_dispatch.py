@@ -8,7 +8,7 @@ async def _mock_session(mock_db):
     yield mock_db
 
 
-class TestCategoryTaskChainDispatch:
+class TestCategoryTaskDispatchesGenerateImages:
     @pytest.mark.asyncio
     async def test_dispatches_generate_images_when_update_succeeds(self):
         """Quando o UPDATE atômico altera 1 linha, generate_images.delay é despachado
@@ -122,7 +122,7 @@ class TestCategoryTaskChainDispatch:
         mock_gi.delay.assert_not_called()
 
 
-class TestSubmitAttributesChainDispatch:
+class TestSubmitAttributesDispatchesGenerateImages:
     @pytest.mark.asyncio
     async def test_dispatches_generate_images_when_batch_and_pending_description(self):
         """submit_attributes em modo batch com pending_description despacha

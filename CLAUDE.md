@@ -27,7 +27,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Fase 4 | ✅ | Geração de descrição (IA) + publicação no ML via API |
 | Fase 5 | ✅ | Frontend Next.js 14 completo |
 | Sprint 1 | ✅ | Multi-account N:N: tabela `user_seller_access`, header `X-Seller-ID`, seletor de seller na sidebar |
-| Sprint 2 | ✅ | Batch import: upload de planilha de anúncios → pipeline automático sem aprovação humana |
+| Sprint 2 | ✅ | Batch import: upload de planilha de anúncios → pipeline avança sozinho até `pending_image_approval`; depois da aprovação humana das imagens para em `ready_to_publish` e só publica por `pipeline/publish` ou `bulk/publish` |
 | SPEC-010 | ✅ | Catálogo de Produtos: tabela `products`, ProductService multi-tenant, CRUD via UI e planilha |
 | SPEC-011 | ✅ | Listing upload refatorado: planilha de anúncios só tem campos de publicação; dados do produto vêm do catálogo |
 | Quick fixes F-1..F-4 | ✅ | Resiliência do pipeline de imagens: ensure_dimensions seguro, _mark_failed robusto, ImageRateLimitError + backoff 429 |
@@ -434,7 +434,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 
 - `test_image_service.py` — `TestEnsureDimensions` (5 casos)
 - `test_image_tasks.py` — `TestMarkFailed` (4), `TestGenerateImagesRateLimit` (2), `TestFetchUploadToken` (2), `TestGenerateImagesIdempotency` (2)
-- `test_batch_chain.py` — `TestCategoryTaskChainDispatch` (3), `TestSubmitAttributesChainDispatch` (1), `TestRemovedInternalDispatch` (2)
+- `test_batch_dispatch.py` — `TestCategoryTaskDispatchesGenerateImages` (3), `TestSubmitAttributesDispatchesGenerateImages` (1), `TestSubmitAttributesReadyToPublishNaoPublicaSozinho` (1), `TestRemovedInternalDispatch` (1): gatilhos de lote despacham só `generate_images.delay`, nunca `publish_listing`
+- `test_lote_para_em_ready_to_publish.py` — `approve_images` e `bulk_approve_images` em lote → `generate_description` → `ready_to_publish`, `publish_listing` nunca chamado (2)
 - `test_image_card_copy_service.py` — saneamento da copy, denylist de conteúdo (true positives + **13 casos de falso positivo**: `12V`, `3,5cm`, `500ml`, `12,50 m`, `99,9%`, `5000mAh`…)
 - `test_perfil_padrao.py` — `PERFIL_PADRAO` para categoria sem perfil próprio, nunca None, roteamento para as 5 posições, nunca auto-aprova em lote
 - `test_r2_asset_store.py` — bucket R2 de ativos: chave `{apelido_ml}/{sku}/{kind}-{timestamp}-{4hex}` (sem colisão no mesmo segundo, ordem cronológica pelo nome), put/get via boto3, sem credencial não levanta, `_salvar_posicao` grava aprovada (bytes preparados) e reprovada (bytes crus), model sem `image_bytes`
