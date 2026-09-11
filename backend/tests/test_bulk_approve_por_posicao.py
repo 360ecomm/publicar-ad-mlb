@@ -86,7 +86,9 @@ def _linhas_padrao(cover_kind: str) -> list[tuple]:
 
 async def _rodar_e_verificar(cover_kind: str):
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests._pg_dedicado import _engine_dedicado
 
     import app.models  # noqa: F401 — registra todas as tabelas
     from app.models.base import Base
@@ -94,7 +96,7 @@ async def _rodar_e_verificar(cover_kind: str):
     from app.models.listing_image import ListingImage
     from app.services.listing_service import ListingService
 
-    engine = create_async_engine(TEST_DB)
+    engine = _engine_dedicado(TEST_DB)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
@@ -170,7 +172,9 @@ class TestBulkApproveImagesRespeitaMlPictureId:
         estoura o indice unico `uq_listing_images_cover_slot` — so a linha
         com `ml_picture_id` pode ser aprovada."""
         from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from tests._pg_dedicado import _engine_dedicado
 
         import app.models  # noqa: F401 — registra todas as tabelas
         from app.models.base import Base
@@ -194,7 +198,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
             (SPECS_AI_KIND, 91, "c91", "uploaded"),
         ]
 
-        engine = create_async_engine(TEST_DB)
+        engine = _engine_dedicado(TEST_DB)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
@@ -248,7 +252,9 @@ class TestBulkApproveImagesRespeitaMlPictureId:
         aprovacao em massa; as outras 4 posicoes oficiais aprovam
         normalmente e as candidatas seguem de fora."""
         from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from tests._pg_dedicado import _engine_dedicado
 
         import app.models  # noqa: F401 — registra todas as tabelas
         from app.models.base import Base
@@ -266,7 +272,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
             (SPECS_AI_KIND, 91, "c91", "uploaded"),
         ]
 
-        engine = create_async_engine(TEST_DB)
+        engine = _engine_dedicado(TEST_DB)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)

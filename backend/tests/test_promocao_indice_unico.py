@@ -159,14 +159,16 @@ class TestCorridaReal:
     @pytest.mark.asyncio
     async def test_duas_promocoes_de_capa_concorrentes_uma_vence_outra_409(self):
         from sqlalchemy import func, select
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from tests._pg_dedicado import _engine_dedicado
 
         import app.models  # noqa: F401 — registra todas as tabelas
         from app.models.base import Base
         from app.models.listing_image import ListingImage, PROMOTABLE_COVER_KINDS
         from app.services.cover_variant_service import promote_cover
 
-        engine = create_async_engine(TEST_DB)
+        engine = _engine_dedicado(TEST_DB)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
@@ -187,14 +189,16 @@ class TestCorridaReal:
     @pytest.mark.asyncio
     async def test_duas_promocoes_de_ficha_concorrentes_uma_vence_outra_409(self):
         from sqlalchemy import func, select
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from tests._pg_dedicado import _engine_dedicado
 
         import app.models  # noqa: F401
         from app.models.base import Base
         from app.models.listing_image import CANDIDATE_SORT_ORDER_FLOOR, ListingImage, PROMOTABLE_SPECS_KINDS
         from app.services.specs_variant_service import promote_specs
 
-        engine = create_async_engine(TEST_DB)
+        engine = _engine_dedicado(TEST_DB)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
