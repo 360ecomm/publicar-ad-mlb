@@ -100,7 +100,6 @@ class TestApproveImagesLoteTerminaEmReadyToPublish:
 
         # Etapa 2: o worker roda de fato e termina em ready_to_publish, sem
         # jamais despachar publish_listing.
-        mock_listing.status = "generating_description"  # guard de idempotência do worker
         mock_pl = await _run_generate_description(mock_listing)
 
         assert mock_listing.status == "ready_to_publish"
@@ -141,7 +140,6 @@ class TestBulkApproveImagesLoteTerminaEmReadyToPublish:
         assert mock_listing.status == "generating_description"
         mock_gen_desc.delay.assert_called_once_with(str(mock_listing.id))
 
-        mock_listing.status = "generating_description"  # guard de idempotência do worker
         mock_pl = await _run_generate_description(mock_listing)
 
         assert mock_listing.status == "ready_to_publish"

@@ -183,8 +183,7 @@ class TestSubmitAttributesReadyToPublishNaoPublicaSozinho:
         """submit_attributes em lote, quando imagem aprovada e descrição já
         existem (retry após erro de publicação), termina em 'ready_to_publish'
         e NÃO despacha publish_listing. Publicação em lote é sempre ação
-        humana (trigger_publish / bulk_publish) — hoje isto vira 'publishing'
-        e chama publish_listing.delay, então este teste deve ficar vermelho."""
+        humana (trigger_publish / bulk_publish)."""
         from app.services.listing_service import ListingService
         from app.models.listing import Listing as ListingModel
 

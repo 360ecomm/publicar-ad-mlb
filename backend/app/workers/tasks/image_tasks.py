@@ -177,9 +177,8 @@ async def _generate_images_async(listing_id: str) -> dict:
         # confirmacao), que so existia para servir esse caminho.
         #
         # O status nao e' `generating_description` nem `publishing`: nada e'
-        # enfileirado depois deste ponto, nem em lote. O proximo passo so
-        # acontece por acao humana (aprovar imagem) ou pela retomada (beat a
-        # cada 15 min, ou endpoint manual), que reentra por aqui.
+        # enfileirado depois deste ponto, nem em lote. O proximo passo e' a
+        # retomada (beat a cada 15 min, ou endpoint manual), que reentra por aqui.
         from app.services.raw_photo_standby_service import (
             PENDING_RAW_PHOTOS,
             missing_photos_message,
