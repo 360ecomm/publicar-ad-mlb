@@ -146,11 +146,15 @@ testado, e é a origem do caso "Colônia" documentado no `CLAUDE.md`.
 
 ### Revisão humana é obrigatória, sem exceção
 
-As 5 nascem `approved=False`. Categoria com perfil **nunca auto-aprova, nem
-em batch** — `_generate_images_async` checa o perfil antes da varredura de
-aprovação em massa. Sem esse guard o batch aprovaria as posições 1–3 (que
-não são `CANDIDATE_KINDS`) e publicaria um anúncio **sem capa e sem ficha**,
-porque essas duas são candidatas e ficariam de fora.
+As 5 nascem `approved=False`, em toda categoria, também em lote. Não existe
+varredura de aprovação automática: o listing para em `pending_image_approval`
+e só avança quando um humano aciona `approve_images` ou
+`bulk_approve_images`. A aprovação em massa aprova as 5 posições (0–4) e
+exclui as candidatas das Frentes A e B **pela posição**
+(`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`, hoje 90), nunca pelo `kind`:
+`cover_ai` e `specs_ai` são também os kinds das posições oficiais 0 e 4, e um
+filtro por kind deixaria a capa e a ficha de fora — publicaria 3 de 5 imagens,
+sem a capa de fundo branco.
 
 ### Resiliência
 
