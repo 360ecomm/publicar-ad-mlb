@@ -33,8 +33,13 @@ class ListingReviewEvent(Base):
     candidata que o operador escolheu de proposito. Em `bulk`, e' o
     `rowcount` do UPDATE em massa, restrito a
     `sort_order < CANDIDATE_SORT_ORDER_FLOOR AND ml_picture_id IS NOT NULL`.
-    Por isso `approved_count == 0` e' legitimo em `bulk`: acontece quando
-    toda posicao falhou QA e nenhuma linha bateu o filtro do UPDATE.
+
+    `approved_count` e' sempre >= 1, nos dois modos. Aprovacao que nao
+    aprova nada nao e' aprovacao: `approve_images` recusa com 422 quando
+    nenhum id pertence ao listing, e `bulk_approve_images` falha o item
+    (`"nenhuma imagem aprovável"`) quando o UPDATE nao atinge nenhuma linha
+    — ex.: toda posicao reprovada no QA. Nos dois casos nao ha evento, o
+    status nao muda e `generate_description` nao e' disparado.
     """
 
     __tablename__ = "listing_review_events"

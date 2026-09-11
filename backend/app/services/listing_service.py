@@ -331,6 +331,15 @@ class ListingService:
 
         approved_set = set(approved_ids)
         by_id = {img.id: img for img in images}
+        # Recusa ANTES de qualquer escrita: uma lista so com ids de OUTRO
+        # anuncio passava pelo guard de lista vazia, cada id era ignorado em
+        # silencio no laco abaixo, e o anuncio avancava com zero aprovadas —
+        # e com todas as imagens dele marcadas `rejected` pelo segundo laco.
+        if approved_set.isdisjoint(by_id):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Nenhum dos ids informados corresponde a uma imagem deste anúncio",
+            )
         approved_ml_ids = []
 
         # A posicao `COVER_SORT_ORDER` (0) e RESERVADA a kind de capa.
@@ -534,6 +543,17 @@ class ListingService:
                     .values(approved=True)
                     .execution_options(synchronize_session=False)
                 )
+                # Nada bateu o filtro (toda posicao reprovada no QA): o
+                # anuncio nao pode avancar sem imagem — nem evento, nem
+                # status, nem `generate_description` (que gastaria uma chamada
+                # ao Gemini). Rollback antes de seguir pro proximo item, pra
+                # nao carregar estado sujo da transacao pra ele.
+                if update_result.rowcount == 0:
+                    await self.db.rollback()
+                    results.append(
+                        BulkItemResult(listing_id=lid, success=False, error="nenhuma imagem aprovável")
+                    )
+                    continue
 
                 # Evento de revisao humana, na MESMA transacao da aprovacao —
                 # mesma regra do individual, so que `mode="bulk"` e
