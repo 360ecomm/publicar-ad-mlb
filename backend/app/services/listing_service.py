@@ -497,7 +497,7 @@ class ListingService:
                 # entao um filtro por kind deixaria a capa e a ficha oficiais de
                 # fora da aprovacao. Ver a docstring de `CANDIDATE_SORT_ORDER_FLOOR`.
                 # `ml_picture_id IS NOT NULL` e' o que impede a capa reprovada no
-                # QA (que fica `ml_picture_id=None`) e o fallback determinístico
+                # QA (que fica `ml_picture_id=None`) e o fallback deterministico
                 # do mesmo slot de colidirem no indice unico
                 # `uq_listing_images_cover_slot`: a reprovada simplesmente nao
                 # entra no UPDATE e continua `approved=False`.
