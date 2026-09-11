@@ -453,6 +453,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 > `test_promocao_indice_unico.py`, que só roda com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
 > `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
+> Os testes reais fazem `drop_all`/`create_all` no `publicar_test` e são donos exclusivos dele — nunca rodar duas suítes (ou uma suíte e um arquivo avulso) contra ele ao mesmo tempo; a colisão aparece como `DBAPIError` em `DROP TABLE`.
 
 ### Migrations aplicadas (ordem cronológica)
 - `a7519acf4e00` — schema inicial (8 tabelas)

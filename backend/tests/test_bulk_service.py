@@ -2,8 +2,10 @@
 import uuid
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
+from pydantic import ValidationError
 from app.services.listing_service import ListingService
 from app.schemas.bulk import BulkListingRequest, BulkAttributeRequest
+from app.schemas.listing import ImageApproveRequest
 
 
 def make_listing(status: str, seller_id=None):
@@ -248,3 +250,22 @@ async def test_bulk_approve_images_exclui_candidatas_por_posicao_nao_por_kind():
     assert "listing_images.sort_order <" in update_sql, update_sql
     assert "listing_images.kind" not in update_sql, update_sql
     assert "listing_images.ml_picture_id IS NOT NULL" in update_sql, update_sql
+
+
+class TestImageApproveRequestReviewSecondsGe0:
+    """`review_seconds` e' `Field(default=None, ge=0)` em
+    `ImageApproveRequest` (backend/app/schemas/listing.py) — tempo negativo
+    nao existe. Cobre so a validacao do schema, sem banco."""
+
+    def test_review_seconds_negativo_levanta_validation_error(self):
+        with pytest.raises(ValidationError) as exc_info:
+            ImageApproveRequest(approved_ids=[uuid.uuid4()], review_seconds=-1)
+        assert "review_seconds" in str(exc_info.value)
+
+    def test_review_seconds_zero_e_aceito(self):
+        req = ImageApproveRequest(approved_ids=[uuid.uuid4()], review_seconds=0)
+        assert req.review_seconds == 0
+
+    def test_review_seconds_none_e_aceito(self):
+        req = ImageApproveRequest(approved_ids=[uuid.uuid4()], review_seconds=None)
+        assert req.review_seconds is None

@@ -1,4 +1,4 @@
-"""Frente B: ficha tecnica renderizada por IA sob demanda + review_seconds.
+"""Frente B: ficha tecnica renderizada por IA sob demanda + evento de revisao.
 
 Testes de `generate_specs_variant` no mesmo estilo de `test_cover_variant.py`
 — db mockado com AsyncMock, engine patchado na origem (imports locais dentro

@@ -25,6 +25,16 @@ class ListingReviewEvent(Base):
 
     Sem `updated_at` e sem `TimestampMixin` de proposito: um evento e'
     imutavel, nao ha "atualizar" um registro de auditoria.
+
+    `approved_count` conta coisas diferentes conforme o `mode`, e os dois
+    numeros nao sao comparaveis entre si. Em `individual`, e' a contagem de
+    todo id que o operador mandou e que pertence ao listing (o loop dentro de
+    `approve_images`) — pode incluir uma linha reprovada em QA ou uma
+    candidata que o operador escolheu de proposito. Em `bulk`, e' o
+    `rowcount` do UPDATE em massa, restrito a
+    `sort_order < CANDIDATE_SORT_ORDER_FLOOR AND ml_picture_id IS NOT NULL`.
+    Por isso `approved_count == 0` e' legitimo em `bulk`: acontece quando
+    toda posicao falhou QA e nenhuma linha bateu o filtro do UPDATE.
     """
 
     __tablename__ = "listing_review_events"
