@@ -30,11 +30,15 @@ class TestCategoryTaskDispatchesGenerateImages:
 
         async def execute_side(stmt):
             execute_calls[0] += 1
-            if execute_calls[0] == 1:  # SELECT Listing
+            if execute_calls[0] == 1:  # 1ª chamada: SELECT Listing
                 r = MagicMock()
                 r.scalar_one = MagicMock(return_value=mock_listing)
                 return r
-            else:  # UPDATE atômico
+            else:
+                # 2ª chamada: select(Product) para o EAN (product_id do
+                # MagicMock é truthy); 3ª chamada: UPDATE atômico. O mesmo
+                # mock serve às duas — scalar_one_or_none() devolve um
+                # MagicMock e rowcount só é lido na 3ª.
                 return mock_update_result
 
         mock_db.execute = execute_side
