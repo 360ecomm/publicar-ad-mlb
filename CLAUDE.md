@@ -446,8 +446,9 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_cinco_posicoes.py` — roteamento por categoria-folha, nenhuma posição nasce aprovada, canvas do perfil, falha de uma não derruba as outras, capa determinística como fallback invisível
 - `test_allowed_values_por_tipo.py` — `values` é enumeração só em `value_type == "list"`; EAN do produto chegando ao GTIN
 - `test_ml_replace_pictures.py` — substituição TOTAL de fotos: recusa lista vazia, ID repetido e perda de `must_keep`
+- `test_bulk_approve_por_posicao.py` — Postgres real (só com `TEST_DATABASE_URL`): `bulk_approve_images` aprova as 5 posições (0–4, inclusive `cover_ai`/`specs_ai` oficiais e a `cover_deterministic` de fallback) e deixa as candidatas 90/91 `approved=False` (2)
 
-> Suíte completa: **431 passed, 2 skipped** (2026-09-10). Os 2 pulados são a corrida real de
+> Suíte completa: **437 passed, 4 skipped** (2026-09-11). Os 4 pulados são os testes com Postgres real de `test_bulk_approve_por_posicao.py` e a corrida real de
 > `test_promocao_indice_unico.py`, que só roda com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
 > `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
@@ -512,6 +513,13 @@ listing vai para `pending_raw_photos` (ver `raw_photo_standby_service`).
 | 2 | `benefits_ai` | IA, copy do LLM (`card_benefits`) | 1ª foto |
 | 3 | `detail_ai` | IA, legenda fixa do perfil | `pick_detail_source()` (3ª foto se existir) |
 | 4 | `specs_ai` | IA, bullets do `value_name` real | capa determinística |
+
+**Candidata é posição, não kind.** As candidatas das Frentes A e B nascem em
+`sort_order` 90/91 (`CANDIDATE_SORT_ORDER_FLOOR = 90`) com os **mesmos**
+kinds `cover_ai`/`specs_ai` das posições 0 e 4 oficiais, então o kind não
+distingue nada. `bulk_approve_images` aprova tudo com `sort_order < 90` e
+deixa 90/91 como estão; um filtro por kind deixaria a capa e a ficha oficiais
+de fora e publicaria 3 de 5 imagens.
 
 Canvas vem de `PositionProfile.canvas` — não de constante do worker. Cada
 posição é independente, com 2 tentativas; falha em uma não derruba as
