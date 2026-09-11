@@ -110,9 +110,11 @@ que é redundante, reintroduz a explosão de custo e o estouro do teto.**
 
 ## Estado final: as 5 posições são o padrão de PRODUTO ÚNICO
 
-Vale para anúncio de produto único cuja **categoria-folha** tenha perfil
-cadastrado em `image_position_profiles.py`. Hoje: só `MLB6284` (Perfumes),
-perfil `PERFIL_PERFUMARIA`.
+Vale para anúncio de produto único em **toda categoria**, desde 2026-09-10:
+`profile_for_category` nunca devolve None. Categoria-folha com perfil próprio
+cadastrado em `image_position_profiles.py` usa o dela (hoje só `MLB6284`,
+Perfumes, perfil `PERFIL_PERFUMARIA`); qualquer outra usa `PERFIL_PADRAO`
+(mesmo canvas 1200×1200, legendas de detalhe neutras).
 
 | Posição | `kind` | Origem | Entrada |
 |---|---|---|---|
@@ -137,8 +139,9 @@ outro formato sem tocar na orquestração.
 
 A raiz de `MLB6284` é `MLB1246 Beleza e Cuidado Pessoal`, com 13 filhas —
 Maquiagem, Manicure, Farmácia, Depilação. Perfil chaveado na raiz aplicaria
-"Frasco elegante" a esmalte e álcool em gel. Categoria sem perfil **cai no
-pipeline antigo**, e não herda o da irmã nem o da raiz.
+"Frasco elegante" a esmalte e álcool em gel. Categoria sem perfil próprio
+**recebe o `PERFIL_PADRAO`**, e não herda o da irmã nem o da raiz. Não existe
+mais pipeline antigo.
 
 `MLB178938` (`Pet Shop > … > Perfumes`, perfume para cães) **não** está
 cadastrada de propósito: vocabulário de atributos próprio, nenhum SKU
