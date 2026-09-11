@@ -183,7 +183,9 @@ async def test_bulk_generate_images_dispatches_generate_images_only():
     assert result.processed == 1
     mock_task.delay.assert_called_once_with(str(listing_id))
     mock_gd.si.assert_not_called()
+    mock_gd.delay.assert_not_called()
     mock_pl.si.assert_not_called()
+    mock_pl.delay.assert_not_called()
     mock_chain_fn.assert_not_called()
 
 

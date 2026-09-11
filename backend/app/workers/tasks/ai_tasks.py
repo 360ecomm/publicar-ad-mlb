@@ -87,10 +87,10 @@ async def _generate_description_async(listing_id: str) -> dict:
         result = await db.execute(select(Listing).where(Listing.id == listing_id))
         listing = result.scalar_one()
 
-        # Guard de idempotência: em uma chain, o step anterior pode ter pausado
-        # (ex: pending_raw_photos, pending_image_approval) sem levantar exceção — nesse
-        # caso o status não avançou para 'generating_description' e este step
-        # deve ser ignorado para não sobrescrever a pausa.
+        # Guard de idempotência: retry do Celery ou despacho duplicado de
+        # generate_description.delay pode reinvocar esta task depois que o
+        # listing já saiu de 'generating_description' — o guard ignora para
+        # não sobrescrever o estado real.
         if listing.status != "generating_description":
             return {"listing_id": listing_id, "skipped": True}
 

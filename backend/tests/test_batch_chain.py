@@ -1,6 +1,6 @@
 import pytest
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @asynccontextmanager
@@ -173,6 +173,7 @@ class TestSubmitAttributesChainDispatch:
         mock_gi.delay.assert_called_once_with("lid")
         mock_gd.si.assert_not_called()
         mock_pl.si.assert_not_called()
+        mock_pl.delay.assert_not_called()
         mock_chain_fn.assert_not_called()
 
 

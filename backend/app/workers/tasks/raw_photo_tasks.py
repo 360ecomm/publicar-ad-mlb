@@ -2,9 +2,10 @@
 
 A cada 15 minutos (ver `beat_schedule` em `celery_app.py`) percorre os
 listings em espera e chama `try_resume_raw_photos` para cada um: quem ja
-tem as fotos no bucket volta para `generating_images` e reentra na chain;
-quem nao tem continua esperando. Nunca levanta por causa de um listing:
-falha de um vira log e nao derruba a varredura dos outros.
+tem as fotos no bucket volta para `generating_images` e reentra com um
+`generate_images.delay()` avulso; quem nao tem continua esperando. Nunca
+levanta por causa de um listing: falha de um vira log e nao derruba a
+varredura dos outros.
 """
 import asyncio
 import logging

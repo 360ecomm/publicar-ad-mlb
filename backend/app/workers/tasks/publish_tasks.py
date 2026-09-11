@@ -19,9 +19,10 @@ async def _publish_listing_async(listing_id: str) -> dict:
             await db.execute(select(Listing).where(Listing.id == listing_id))
         ).scalar_one()
 
-        # Guard de idempotência: em uma chain, um step anterior pode ter pausado
-        # sem levantar exceção — nesse caso o status não avançou para 'publishing'
-        # e este step deve ser ignorado para não publicar um anúncio incompleto.
+        # Guard de idempotência: retry do Celery ou despacho duplicado de
+        # publish_listing pode reinvocar esta task depois que o listing já
+        # saiu de 'publishing' (publicado ou marcado failed) — o guard ignora
+        # para não publicar de novo nem sobrescrever o resultado.
         if listing.status != "publishing":
             return {"listing_id": listing_id, "skipped": True}
 
