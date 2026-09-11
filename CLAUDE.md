@@ -352,7 +352,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 
 ## Arquitetura de duas planilhas
 
-**TGFPRO (catálogo de produtos):** sku, descricao, marca, modelo, ean, ncm, origemfiscal, icmscst, icmsrate, piscst, cofinscst, pesokg, comprimentocm, larguracm, alturacm, custo
+**TGFPRO (catálogo de produtos), 24 colunas:** sku, descricao, marca, modelo, ean, ncm, origemfiscal, icmscst, icmsrate, piscst, cofinscst, pesokg, comprimentocm, larguracm, alturacm, custo, grupo_produto, referencia_tecnica, aplicacao_veiculo, cor, tamanho, capacidade, material, genero. As 8 últimas são os campos estruturados para geração de título (SPEC-013); o parser normaliza o cabeçalho (remove `_`, acentos e espaços) antes de mapear
 - Upload via `POST /api/v1/products/upload` ou formulário `/products/new` / `/products/{sku}/edit`
 - Multi-tenant: `seller_id` em todas as queries via `ProductService._base_query()`
 
