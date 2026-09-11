@@ -363,10 +363,11 @@ async def _salvar_posicao(db, listing, sku, kind, sort_order, gerado, access_tok
 async def _gerar_cinco_posicoes(db, listing, access_token, profile, fotos, sku) -> int:
     """As 5 posicoes do esquema, cada uma independente. Devolve quantas subiram.
 
-    Substitui, para categoria com perfil, o modelo antigo de "N variantes por
-    foto": cada posicao 2-4 e UMA chamada de edicao que pode referenciar TODAS
-    as fotos brutas do SKU, entao o corte `[:RAW_PHOTOS_MIN]` nao se aplica
-    aqui (ele continua no caminho antigo, intocado).
+    E o unico caminho de imagens, em toda categoria (perfil proprio so em
+    MLB6284; as demais usam `PERFIL_PADRAO`). Substituiu o modelo antigo de
+    "N variantes por foto": cada posicao 2-4 e UMA chamada de edicao que pode
+    referenciar TODAS as fotos brutas do SKU, entao nao ha corte
+    `[:RAW_PHOTOS_MIN]` aqui.
 
     A capa DETERMINISTICA e calculada mas NAO vira linha visivel: serve de
     base para as posicoes 1 e 5 e so e persistida se a posicao 1 por IA

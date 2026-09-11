@@ -5,9 +5,9 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Minimo OBRIGATORIO. Faltando `{sku}-1` ou `{sku}-2` (em qualquer extensao de
-# RAW_PHOTO_EXTENSIONS), o SKU e tratado
-# como "sem fotos brutas" e o pipeline cai no caminho antigo — comportamento
-# inalterado desde sempre.
+# RAW_PHOTO_EXTENSIONS), o SKU e tratado como "sem fotos brutas": o listing
+# vai para `pending_raw_photos` e espera as fotos chegarem (ver
+# `raw_photo_standby_service`). Nao existe fallback de geracao.
 RAW_PHOTOS_MIN = 2
 
 # Teto de sondagem. As fotos sao descobertas por tentativa (nao ha listagem no
