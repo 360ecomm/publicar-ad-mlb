@@ -287,7 +287,7 @@ async def promote_specs(db, listing, image_id: UUID) -> None:
 
     if rebaixaveis:
         slot = min(o.sort_order for o in rebaixaveis)
-    elif target.sort_order < CANDIDATE_SORT_ORDER_FLOOR:
+    elif not target.is_candidate:
         # Ja esta na galeria e nao ha outra ficha: fica onde esta.
         slot = target.sort_order
     else:
