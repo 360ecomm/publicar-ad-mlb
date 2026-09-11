@@ -52,7 +52,8 @@ class TestWorkerEntraEmStandby:
             result = await _generate_images_async("lid")
 
         assert listing.status == "pending_raw_photos"
-        assert "T99-1.jpg" in listing.error_message and "T99-2.jpg" in listing.error_message
+        assert "T99-1 e T99-2" in listing.error_message
+        assert "em .jpg, .png ou .webp" in listing.error_message
         assert result == {"listing_id": "lid", "pending_raw_photos": True}
         assert db.add.call_args_list == [], "nada gerado, nada gravado"
 
@@ -216,6 +217,32 @@ class TestTarefaPeriodica:
         assert celery_app.conf.task_routes["app.workers.tasks.raw_photo_tasks.*"] == {"queue": "default"}
 
 
+class TestMensagemFotosAusentes:
+    """A mensagem que o operador le (error_message do listing e 409 do
+    'Verificar fotos agora') e derivada das constantes, nao de texto fixo:
+    nomes obrigatorios de RAW_PHOTOS_MIN, formatos de RAW_PHOTO_EXTENSIONS."""
+
+    def test_lista_cada_extensao_aceita(self):
+        from app.services.raw_photo_standby_service import missing_photos_message
+        from app.services.seller_image_source_service import RAW_PHOTO_EXTENSIONS
+
+        msg = missing_photos_message("FAROL01")
+        for ext in RAW_PHOTO_EXTENSIONS:
+            assert f".{ext}" in msg, f"extensao .{ext} ausente em: {msg}"
+        assert "em .jpg, .png ou .webp" in msg
+
+    def test_lista_cada_nome_obrigatorio_sem_extensao_fixa(self):
+        from app.services.raw_photo_standby_service import missing_photos_message
+        from app.services.seller_image_source_service import RAW_PHOTOS_MIN
+
+        msg = missing_photos_message("FAROL01")
+        nomes = [f"FAROL01-{n}" for n in range(1, RAW_PHOTOS_MIN + 1)]
+        for nome in nomes:
+            assert nome in msg
+        assert "FAROL01-1 e FAROL01-2" in msg, msg
+        assert "FAROL01-1.jpg" not in msg, "extensao nao pode estar cravada no nome"
+
+
 class TestRetomadaManual:
     @pytest.mark.asyncio
     async def test_status_errado_da_409(self):
@@ -238,7 +265,7 @@ class TestRetomadaManual:
             with pytest.raises(HTTPException) as exc:
                 await ListingService(AsyncMock()).resume_raw_photos(listing)
         assert exc.value.status_code == 409
-        assert "T99-1.jpg" in exc.value.detail
+        assert "T99-1 e T99-2" in exc.value.detail and ".webp" in exc.value.detail
 
     @pytest.mark.asyncio
     async def test_fotos_presentes_retoma(self):

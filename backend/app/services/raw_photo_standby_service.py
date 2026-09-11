@@ -1,7 +1,8 @@
 """Standby por falta de foto bruta: `pending_raw_photos`.
 
-Quando `_try_i2i_generation` nao encontra `{sku}-1.jpg` e `{sku}-2.jpg` no
-bucket do seller, o listing NAO cai em nenhum fallback de geracao: entra em
+Quando `_try_i2i_generation` nao encontra as `RAW_PHOTOS_MIN` fotos
+obrigatorias (`{sku}-1` e `{sku}-2`, em qualquer das `RAW_PHOTO_EXTENSIONS`:
+jpg, png ou webp) no bucket do seller, o listing NAO cai em nenhum fallback de geracao: entra em
 `pending_raw_photos` e espera. Antes existia um caminho texto-imagem (prompt
 do LLM + motor gerando do zero) que em lote auto-aprovava e publicava um
 anuncio com imagem inventada — removido em 2026-09-10.
@@ -22,18 +23,32 @@ from sqlalchemy import select, update as sa_update
 
 from app.models.listing import Listing
 from app.models.seller_image_config import SellerImageConfig
-from app.services.seller_image_source_service import RAW_PHOTOS_MIN, fetch_raw_photos
+from app.services.seller_image_source_service import (
+    RAW_PHOTO_EXTENSIONS,
+    RAW_PHOTOS_MIN,
+    fetch_raw_photos,
+)
 
 logger = logging.getLogger(__name__)
 
 PENDING_RAW_PHOTOS = "pending_raw_photos"
 
 
+def _enumerar(itens: list[str], conector: str) -> str:
+    """'a, b e c' / 'a, b ou c' — lista legivel em portugues."""
+    if len(itens) == 1:
+        return itens[0]
+    return ", ".join(itens[:-1]) + f" {conector} " + itens[-1]
+
+
 def missing_photos_message(sku: str) -> str:
-    obrigatorias = ", ".join(f"{sku}-{n}.jpg" for n in range(1, RAW_PHOTOS_MIN + 1))
+    # Derivada das constantes, nunca texto fixo: se RAW_PHOTOS_MIN ou
+    # RAW_PHOTO_EXTENSIONS mudarem, a mensagem que o operador le acompanha.
+    obrigatorias = _enumerar([f"{sku}-{n}" for n in range(1, RAW_PHOTOS_MIN + 1)], "e")
+    formatos = _enumerar([f".{ext}" for ext in RAW_PHOTO_EXTENSIONS], "ou")
     return (
         f"Fotos brutas do SKU {sku} não encontradas no bucket do seller "
-        f"(obrigatórias: {obrigatorias}). O sistema verifica de novo a cada 15 minutos; "
+        f"(obrigatórias: {obrigatorias}, em {formatos}). O sistema verifica de novo a cada 15 minutos; "
         "ou use 'Verificar fotos agora' depois de subir os arquivos."
     )
 

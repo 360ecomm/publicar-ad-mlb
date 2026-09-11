@@ -480,7 +480,7 @@ draft
                                                                                                           └─(batch: pausa — SKU aguarda ação manual)
                                                                                        └─(pending_description)──► [manual: pipeline/generate_images]
                                                                                                                     └─(batch: auto)──► generating_images
-                                                                                                                                         └─(sem {sku}-1.jpg/-2.jpg no bucket)──► pending_raw_photos ──(beat 15 min ou resume_raw_photos)──► generating_images
+                                                                                                                                         └─(sem {sku}-1/-2 em .jpg/.png/.webp no bucket)──► pending_raw_photos ──(beat 15 min ou resume_raw_photos)──► generating_images
                                                                                                                                          └─(OpenAI indisponível: crédito/401/403/5xx/timeout)──► pending_ai_engine ──(beat 15 min ou resume_ai_engine)──► generating_images
                                                                                                                                          └─(worker OK)──► pending_image_approval [manual]
                                                                                                                                                              └─(images/approve)──► generating_description

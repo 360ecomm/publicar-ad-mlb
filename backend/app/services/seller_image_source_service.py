@@ -4,7 +4,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Minimo OBRIGATORIO. Faltando `{sku}-1.jpg` ou `{sku}-2.jpg`, o SKU e tratado
+# Minimo OBRIGATORIO. Faltando `{sku}-1` ou `{sku}-2` (em qualquer extensao de
+# RAW_PHOTO_EXTENSIONS), o SKU e tratado
 # como "sem fotos brutas" e o pipeline cai no caminho antigo — comportamento
 # inalterado desde sempre.
 RAW_PHOTOS_MIN = 2
@@ -39,7 +40,8 @@ async def resolve_listing_skus(listing) -> list[str]:
 async def fetch_raw_photos(raw_base_url: str, sku: str) -> list[bytes] | None:
     """Descobre e baixa as fotos brutas de um SKU no bucket do seller.
 
-    Sonda `{sku}-1.jpg`, `-2.jpg`, `-3.jpg`... ate o primeiro ausente ou ate
+    Sonda `{sku}-1`, `-2`, `-3`... (cada indice em `RAW_PHOTO_EXTENSIONS`,
+    nesta ordem) ate o primeiro ausente ou ate
     `RAW_PHOTOS_MAX`. O bucket e publico e sem listagem, entao descobrir por
     tentativa e a unica forma de saber quantas fotos existem.
 
