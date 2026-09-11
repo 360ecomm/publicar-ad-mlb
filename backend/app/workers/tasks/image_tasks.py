@@ -237,8 +237,9 @@ def upload_images_to_ml(self, listing_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Esquema de 5 posicoes — padrao para anuncio de PRODUTO UNICO em categoria
-# com perfil cadastrado. Ver docs/superpowers/specs/esquema-5-posicoes.md.
+# Esquema de 5 posicoes — padrao unico de imagens de PRODUTO UNICO, em toda
+# categoria: perfil proprio so em MLB6284, as demais usam PERFIL_PADRAO.
+# Ver docs/superpowers/specs/esquema-5-posicoes.md.
 # ---------------------------------------------------------------------------
 
 POSITION_KIND_PRESENTATION = "presentation_ai"
