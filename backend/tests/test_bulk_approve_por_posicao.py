@@ -75,7 +75,7 @@ async def _semear(session_maker, cover_kind: str):
         ]
         s.add_all(posicoes + candidatas)
         await s.commit()
-        return listing.id, seller.id, [img.id for img in posicoes + candidatas]
+        return listing.id, seller.id
 
 
 async def _rodar_e_verificar(cover_kind: str):
@@ -94,7 +94,7 @@ async def _rodar_e_verificar(cover_kind: str):
         await conn.run_sync(Base.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        listing_id, seller_id, _ = await _semear(sm, cover_kind)
+        listing_id, seller_id = await _semear(sm, cover_kind)
 
         async with sm() as s:
             svc = ListingService(s, seller_id)
@@ -104,6 +104,7 @@ async def _rodar_e_verificar(cover_kind: str):
 
             assert result.processed == 1, result
 
+            s.expire_all()
             rows = (
                 await s.execute(
                     select(ListingImage)
@@ -119,6 +120,7 @@ async def _rodar_e_verificar(cover_kind: str):
             for pos in (90, 91):
                 assert por_posicao[pos] is False, f"candidata {pos} NAO deveria estar aprovada: {por_posicao}"
 
+            s.expire_all()
             listing = (await s.execute(select(Listing).where(Listing.id == listing_id))).scalar_one()
             assert listing.status == "generating_description", listing.status
 

@@ -1,9 +1,10 @@
-"""Esquema de 5 posicoes como padrao de produto unico em categoria com perfil.
+"""Esquema de 5 posicoes como padrao unico de imagens de produto unico, em toda categoria.
 
 O que estes testes travam, em ordem de importancia:
 
-1. ROTEAMENTO por categoria-FOLHA. Categoria sem perfil segue o caminho
-   antigo — e o que mantem a mudanca contida a perfumaria.
+1. ROTEAMENTO por categoria-FOLHA. Categoria com perfil proprio (hoje so
+   MLB6284) usa o dela; qualquer outra usa PERFIL_PADRAO. Nao existe mais
+   caminho antigo.
 2. NENHUMA aprovacao automatica, nem em batch. Revisao humana e obrigatoria
    nas 5 posicoes; sem guard, o batch aprovaria imagens sem revisao. A
    aprovacao em massa (`bulk_approve_images`) exclui candidatas pela POSICAO
