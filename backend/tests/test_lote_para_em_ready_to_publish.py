@@ -75,7 +75,7 @@ class TestApproveImagesLoteTerminaEmReadyToPublish:
 
         mock_img = MagicMock()
         mock_img.id = uuid.uuid4()
-        mock_img.kind = "presentation"
+        mock_img.kind = "presentation_ai"
         mock_img.approved = False
         mock_img.ml_picture_id = "ML123"
 

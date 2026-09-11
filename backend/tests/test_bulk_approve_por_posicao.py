@@ -97,7 +97,7 @@ def _linhas_padrao(cover_kind: str) -> list[tuple]:
 
     return [
         (cover_kind, 0, "p0", "uploaded"),
-        ("presentation", 1, "p1", "uploaded"),
+        ("presentation_ai", 1, "p1", "uploaded"),
         ("benefits_ai", 2, "p2", "uploaded"),
         ("detail_ai", 3, "p3", "uploaded"),
         (SPECS_AI_KIND, 4, "p4", "uploaded"),
@@ -198,7 +198,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
         linhas = [
             (COVER_AI_KIND, 0, None, "validation_failed"),
             (COVER_DETERMINISTIC_KIND, 0, "pcd", "uploaded"),
-            ("presentation", 1, "p1", "uploaded"),
+            ("presentation_ai", 1, "p1", "uploaded"),
             ("benefits_ai", 2, "p2", "uploaded"),
             ("detail_ai", 3, "p3", "uploaded"),
             (SPECS_AI_KIND, 4, "p4", "uploaded"),
@@ -263,7 +263,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
 
         linhas = [
             (COVER_AI_KIND, 0, "p0", "uploaded"),
-            ("presentation", 1, "p1", "uploaded"),
+            ("presentation_ai", 1, "p1", "uploaded"),
             ("benefits_ai", 2, None, "validation_failed"),
             ("detail_ai", 3, "p3", "uploaded"),
             (SPECS_AI_KIND, 4, "p4", "uploaded"),

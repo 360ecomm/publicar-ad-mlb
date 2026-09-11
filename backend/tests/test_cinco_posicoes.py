@@ -143,7 +143,7 @@ class TestCincoPosicoes:
         assert salvas == 5
         imgs = _salvos(db)
         assert [i.kind for i in imgs] == [
-            "cover_ai", "presentation", "benefits_ai", "detail_ai", "specs_ai"
+            "cover_ai", "presentation_ai", "benefits_ai", "detail_ai", "specs_ai"
         ]
         assert [i.sort_order for i in imgs] == [0, 1, 2, 3, 4]
 
@@ -199,7 +199,7 @@ class TestCincoPosicoes:
         kinds = [i.kind for i in _salvos(db)]
         assert "benefits_ai" not in kinds
         assert salvas == 4
-        assert kinds == ["cover_ai", "presentation", "detail_ai", "specs_ai"]
+        assert kinds == ["cover_ai", "presentation_ai", "detail_ai", "specs_ai"]
 
     @pytest.mark.asyncio
     async def test_posicao_reprovada_no_qa_guarda_os_bytes(self):

@@ -509,7 +509,7 @@ listing vai para `pending_raw_photos` (ver `raw_photo_standby_service`).
 | # | `kind` | Origem | Entrada |
 |---|---|---|---|
 | 0 | `cover_ai` | IA, prompt leve (fundo branco) | capa determinística |
-| 1 | `presentation` | IA | **todas** as fotos brutas do SKU |
+| 1 | `presentation_ai` | IA | **todas** as fotos brutas do SKU |
 | 2 | `benefits_ai` | IA, copy do LLM (`card_benefits`) | 1ª foto |
 | 3 | `detail_ai` | IA, legenda fixa do perfil | `pick_detail_source()` (3ª foto se existir) |
 | 4 | `specs_ai` | IA, bullets do `value_name` real | capa determinística |

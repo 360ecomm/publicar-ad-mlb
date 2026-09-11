@@ -241,7 +241,7 @@ def upload_images_to_ml(self, listing_id: str) -> dict:
 # com perfil cadastrado. Ver docs/superpowers/specs/esquema-5-posicoes.md.
 # ---------------------------------------------------------------------------
 
-POSITION_KIND_PRESENTATION = "presentation"
+POSITION_KIND_PRESENTATION = "presentation_ai"
 POSITION_KIND_BENEFITS = "benefits_ai"
 POSITION_KIND_DETAIL = "detail_ai"
 
