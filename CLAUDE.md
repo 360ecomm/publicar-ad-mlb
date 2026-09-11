@@ -377,7 +377,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `listing.py` — Listing (sku_external_id, sku_description, sku_brand, **sku_model**, price, status, ...)
 - `listing_title.py` — ListingTitle
 - `listing_attribute.py` — ListingAttribute (allowed_values JSONB, is_required, source)
-- `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order)
+- `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order, kind, validation_error) + propriedade `is_candidate` (`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`), a única definição de candidata
 - `listing_review_event.py` — ListingReviewEvent (listing_id, user_id, action, mode, approved_count, review_seconds, created_at) — 1 linha por aprovação humana de imagens, imutável (sem `updated_at`). Apaga junto com o listing (FK `ON DELETE CASCADE` + `cascade="all, delete-orphan"` em `Listing.review_events`); `user_id` não cascateia
 - `listing_description.py` — ListingDescription
 - `listing_job.py` — ListingJob
@@ -414,6 +414,9 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `health.py`, `auth.py`, `listings.py`
 - `products.py` — CRUD de produtos + upload de planilha
 - `import.py` — batch import de anúncios + histórico
+
+### backend/app/schemas/
+- `listing.py` — `ImageOut` (`id`, `ml_picture_id`, `status`, `approved`, `sort_order`, `kind`, `is_candidate`, `validation_error`): o que `GET /listings/{id}` devolve por imagem. **`is_candidate` é calculado no backend** (`ListingImage.is_candidate`); o frontend consome o booleano e **não** reimplementa a comparação de `sort_order`. `validation_error` é o motivo quando `status = validation_failed`. Espelho TS em `frontend/src/types/listing.ts`
 
 ### backend/app/workers/tasks/
 - `ai_tasks.py` — `generate_title`, `generate_description`
