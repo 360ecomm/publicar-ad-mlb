@@ -640,7 +640,7 @@ Rodar com `npm run dev` dentro de `frontend/`. Porta: `http://localhost:3000`
 - `src/lib/utils.ts` — `formatPrice()`, `formatQuantity()` (usam `Number()` antes de `toLocaleString`)
 - `src/types/product.ts`, `types/listing.ts`
 
-> **Atenção:** `frontend/src/lib/` é capturado pelo padrão `lib/` no `.gitignore` (artefato Python). Novos arquivos neste diretório precisam de `git add -f`.
+> **Nota:** o padrão `lib/` do `.gitignore` é artefato de build Python; desde `5f92130`, `!frontend/src/lib/` reinclui este diretório. Arquivos novos aqui entram com `git add` normal.
 
 ---
 
