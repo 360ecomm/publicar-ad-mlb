@@ -109,6 +109,11 @@ class ImageOut(BaseModel):
     status: str
     approved: bool
     sort_order: int
+    # Para a tela de revisao: qual posicao e' (kind), se e' candidata das
+    # Frentes A/B (posicao >= 90, calculado no model) e por que reprovou no QA.
+    kind: str
+    is_candidate: bool
+    validation_error: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

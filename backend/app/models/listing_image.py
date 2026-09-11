@@ -73,6 +73,10 @@ PROMOTABLE_SPECS_KINDS = frozenset({CARD_SPECS_KIND, SPECS_AI_KIND})
 # `ml_picture_id` e o filtro que monta o payload de fotos da publicacao,
 # entao uma candidata aprovada por engano vai ao ar no anuncio real.
 #
+# Em Python, consultar por `ListingImage.is_candidate` (propriedade abaixo),
+# nunca reescrever a comparacao. Em SQL (UPDATE em massa, promocoes) a
+# constante continua sendo a forma de expressar o mesmo predicado.
+#
 # `bulk_approve_images` usa o MESMO criterio `aprovado + ml_picture_id` na
 # outra ponta: o UPDATE so aprova quem, alem de estar na galeria
 # (`sort_order < CANDIDATE_SORT_ORDER_FLOOR`), tem `ml_picture_id` preenchido.
@@ -141,5 +145,11 @@ class ListingImage(Base):
     # Tempo que um humano levou conferindo a versao gerada por IA contra o dado
     # real. Instrumentacao manual, amostra de 10-15 SKUs — nao e analytics.
     review_seconds: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+
+    @property
+    def is_candidate(self) -> bool:
+        """Candidata das Frentes A/B: `sort_order >= CANDIDATE_SORT_ORDER_FLOOR`.
+        Unica definicao em Python — o `kind` nao distingue (ver a constante)."""
+        return self.sort_order >= CANDIDATE_SORT_ORDER_FLOOR
 
     listing: Mapped["Listing"] = relationship("Listing", back_populates="images")

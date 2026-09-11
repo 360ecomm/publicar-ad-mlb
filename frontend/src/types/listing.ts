@@ -56,6 +56,9 @@ export interface ImageOut {
   status: string
   approved: boolean
   sort_order: number
+  kind: string
+  is_candidate: boolean
+  validation_error: string | null
 }
 
 export interface JobOut {
