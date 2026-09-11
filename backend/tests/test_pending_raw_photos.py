@@ -9,7 +9,8 @@ de geracao do zero), que em lote auto-aprovava e PUBLICAVA. Decisao de
 Retomada: automatica (beat, a cada 15 min) ou manual (endpoint). As duas
 usam o mesmo `try_resume_raw_photos`, que reusa a sondagem do bucket que ja
 existe (`fetch_raw_photos`) e reentra no pipeline pelo mesmo ponto de sempre
-(`generate_images`, em chain quando e' lote).
+(`generate_images.delay`, igual para lote e manual — publicar continua sendo
+sempre acao humana).
 """
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -58,7 +59,7 @@ class TestWorkerEntraEmStandby:
     @pytest.mark.asyncio
     async def test_lote_sem_foto_nao_publica(self):
         """O status novo nao e' `generating_description` nem `publishing`:
-        os guards das tasks seguintes pulam e a chain morre em silencio."""
+        o listing nao avanca sozinho para as proximas etapas."""
         from app.workers.tasks.image_tasks import _generate_images_async
 
         listing = _listing(created_via="batch", status="generating_images")
@@ -150,32 +151,33 @@ class TestRetomada:
 
 
 class TestDispatchReentraNoMesmoPonto:
-    def test_lote_usa_a_chain_completa_comecando_em_generate_images(self):
+    def test_lote_usa_delay_avulso_igual_ao_manual(self):
+        """Lote e manual despacham generate_images.delay direto — chain de 1
+        elemento era ruído, e generate_description/publish_listing nunca
+        rodavam sozinhos por este caminho (publicar é sempre ação humana:
+        trigger_publish / bulk_publish)."""
         from app.services.raw_photo_standby_service import dispatch_image_generation
 
         listing = _listing(created_via="batch")
-        with patch("app.services.raw_photo_standby_service.celery_chain") as chain, \
-             patch("app.workers.tasks.image_tasks.generate_images") as gi, \
+        with patch("app.workers.tasks.image_tasks.generate_images") as gi, \
              patch("app.workers.tasks.ai_tasks.generate_description") as gd, \
              patch("app.workers.tasks.publish_tasks.publish_listing") as pl:
             dispatch_image_generation(listing)
 
-        gi.si.assert_called_once_with("lid")
-        gd.si.assert_called_once_with("lid")
-        pl.si.assert_called_once_with("lid")
-        chain.assert_called_once_with(gi.si.return_value, gd.si.return_value, pl.si.return_value)
-        chain.return_value.delay.assert_called_once()
+        gi.delay.assert_called_once_with("lid")
+        gd.si.assert_not_called()
+        gd.delay.assert_not_called()
+        pl.si.assert_not_called()
+        pl.delay.assert_not_called()
 
     def test_manual_usa_delay_avulso(self):
         from app.services.raw_photo_standby_service import dispatch_image_generation
 
         listing = _listing(created_via="manual")
-        with patch("app.services.raw_photo_standby_service.celery_chain") as chain, \
-             patch("app.workers.tasks.image_tasks.generate_images") as gi:
+        with patch("app.workers.tasks.image_tasks.generate_images") as gi:
             dispatch_image_generation(listing)
 
         gi.delay.assert_called_once_with("lid")
-        chain.assert_not_called()
 
 
 class TestTarefaPeriodica:

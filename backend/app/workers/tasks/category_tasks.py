@@ -34,7 +34,9 @@ async def _predict_category_async(listing_id: str, ean: str | None = None) -> di
         await service.predict_and_save(listing, ean=ean)
         await db.commit()
 
-        # Batch: avança automaticamente para geração de imagens sem esperar aprovação humana
+        # Batch: avança automaticamente para geração de imagens sem esperar
+        # aprovação humana. Publicação em lote nunca acontece sozinha: é
+        # sempre ação humana (trigger_publish / bulk_publish).
         if listing.created_via == "batch" and listing.status == "pending_description":
             from sqlalchemy import update as sa_update
             result = await db.execute(
@@ -49,15 +51,8 @@ async def _predict_category_async(listing_id: str, ean: str | None = None) -> di
             )
             await db.commit()
             if result.rowcount == 1:
-                from celery import chain as celery_chain
                 from app.workers.tasks.image_tasks import generate_images
-                from app.workers.tasks.ai_tasks import generate_description
-                from app.workers.tasks.publish_tasks import publish_listing
-                celery_chain(
-                    generate_images.si(listing_id),
-                    generate_description.si(listing_id),
-                    publish_listing.si(listing_id),
-                ).delay()
+                generate_images.delay(listing_id)
 
     return {"listing_id": listing_id, "category_id": listing.ml_category_id}
 

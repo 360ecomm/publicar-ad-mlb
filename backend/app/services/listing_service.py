@@ -231,35 +231,25 @@ class ListingService:
         listing.status = new_status
         await self.db.commit()
 
-        # Batch: avança automaticamente sem esperar o seller clicar
-        if listing.created_via == "batch":
-            if new_status == "pending_description":
-                result = await self.db.execute(
-                    update(Listing)
-                    .where(
-                        Listing.id == listing.id,
-                        Listing.status == "pending_description",
-                    )
-                    .values(status="generating_images")
-                    .execution_options(synchronize_session=False)
+        # Batch: avança automaticamente para geração de imagens sem esperar o
+        # seller clicar. Publicação em lote nunca acontece sozinha: mesmo
+        # quando o retry pula direto para 'ready_to_publish', o listing fica
+        # parado até ação humana (trigger_publish / bulk_publish).
+        if listing.created_via == "batch" and new_status == "pending_description":
+            result = await self.db.execute(
+                update(Listing)
+                .where(
+                    Listing.id == listing.id,
+                    Listing.status == "pending_description",
                 )
-                await self.db.commit()
-                if result.rowcount == 1:
-                    listing.status = "generating_images"
-                    from celery import chain as celery_chain
-                    from app.workers.tasks.image_tasks import generate_images
-                    from app.workers.tasks.ai_tasks import generate_description
-                    from app.workers.tasks.publish_tasks import publish_listing
-                    celery_chain(
-                        generate_images.si(str(listing.id)),
-                        generate_description.si(str(listing.id)),
-                        publish_listing.si(str(listing.id)),
-                    ).delay()
-            elif new_status == "ready_to_publish":
-                listing.status = "publishing"
-                await self.db.commit()
-                from app.workers.tasks.publish_tasks import publish_listing
-                publish_listing.delay(str(listing.id))
+                .values(status="generating_images")
+                .execution_options(synchronize_session=False)
+            )
+            await self.db.commit()
+            if result.rowcount == 1:
+                listing.status = "generating_images"
+                from app.workers.tasks.image_tasks import generate_images
+                generate_images.delay(str(listing.id))
 
     async def trigger_image_generation(self, listing: Listing) -> None:
         if listing.status != "pending_description":
@@ -538,15 +528,8 @@ class ListingService:
                 if r.rowcount == 0:
                     results.append(BulkItemResult(listing_id=lid, success=False, error="estado inválido"))
                     continue
-                from celery import chain as celery_chain
                 from app.workers.tasks.image_tasks import generate_images
-                from app.workers.tasks.ai_tasks import generate_description
-                from app.workers.tasks.publish_tasks import publish_listing
-                celery_chain(
-                    generate_images.si(str(lid)),
-                    generate_description.si(str(lid)),
-                    publish_listing.si(str(lid)),
-                ).delay()
+                generate_images.delay(str(lid))
                 results.append(BulkItemResult(listing_id=lid, success=True))
             except Exception as e:
                 await self.db.rollback()

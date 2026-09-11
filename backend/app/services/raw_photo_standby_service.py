@@ -12,12 +12,12 @@ Duas retomadas, uma so logica:
 - manual: `ListingService.resume_raw_photos`, sob demanda, mesma funcao.
 
 A sondagem do bucket e' a que ja existe (`fetch_raw_photos`), e a reentrada
-no pipeline e' pelo mesmo ponto de sempre: `generate_images`, em chain
-completa quando o anuncio e' de lote.
+no pipeline e' pelo mesmo ponto de sempre: `generate_images.delay`, igual
+para lote e manual — publicar continua sendo sempre acao humana
+(`trigger_publish` / `bulk_publish`).
 """
 import logging
 
-from celery import chain as celery_chain
 from sqlalchemy import select, update as sa_update
 
 from app.models.listing import Listing
@@ -54,23 +54,14 @@ async def raw_photos_available(db, listing: Listing) -> bool:
 def dispatch_image_generation(listing: Listing) -> None:
     """Reentra no pipeline pelo ponto de sempre.
 
-    Lote precisa da chain completa (imagens → descricao → publicacao) para o
-    pipeline seguir sozinho, igual ao dispatch original do `category_tasks`.
-    Manual pausa em cada etapa por design: um `.delay()` avulso basta.
+    Lote e manual pausam em cada etapa por design, esperando aprovacao
+    humana (imagens, depois publicacao): um `.delay()` avulso basta para os
+    dois — nao ha mais chain nem despacho automatico de
+    generate_description/publish_listing por este caminho.
     """
     from app.workers.tasks.image_tasks import generate_images
 
-    if listing.created_via == "batch":
-        from app.workers.tasks.ai_tasks import generate_description
-        from app.workers.tasks.publish_tasks import publish_listing
-
-        celery_chain(
-            generate_images.si(str(listing.id)),
-            generate_description.si(str(listing.id)),
-            publish_listing.si(str(listing.id)),
-        ).delay()
-    else:
-        generate_images.delay(str(listing.id))
+    generate_images.delay(str(listing.id))
 
 
 async def try_resume_raw_photos(db, listing: Listing) -> bool:

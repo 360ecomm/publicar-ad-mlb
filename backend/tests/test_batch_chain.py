@@ -10,8 +10,10 @@ async def _mock_session(mock_db):
 
 class TestCategoryTaskChainDispatch:
     @pytest.mark.asyncio
-    async def test_dispatches_chain_when_update_succeeds(self):
-        """Quando o UPDATE atômico altera 1 linha, a chain é despachada."""
+    async def test_dispatches_generate_images_when_update_succeeds(self):
+        """Quando o UPDATE atômico altera 1 linha, generate_images.delay é despachado
+        direto (chain de 1 elemento é ruído; generate_description/publish_listing
+        nunca são chamados por este caminho)."""
         from app.workers.tasks.category_tasks import _predict_category_async
 
         mock_listing = MagicMock()
@@ -37,18 +39,21 @@ class TestCategoryTaskChainDispatch:
 
         mock_db.execute = execute_side
 
-        mock_chain_instance = MagicMock()
-
         with patch("app.database.worker_session", lambda: _mock_session(mock_db)), \
              patch("app.services.category_service.CategoryService") as mock_cat_cls, \
-             patch("celery.chain", return_value=mock_chain_instance) as mock_chain_fn:
+             patch("app.workers.tasks.image_tasks.generate_images") as mock_gi, \
+             patch("app.workers.tasks.ai_tasks.generate_description") as mock_gd, \
+             patch("app.workers.tasks.publish_tasks.publish_listing") as mock_pl, \
+             patch("celery.chain") as mock_chain_fn:
             mock_cat = AsyncMock()
             mock_cat.predict_and_save = AsyncMock()
             mock_cat_cls.return_value = mock_cat
             await _predict_category_async("listing-id")
 
-        mock_chain_fn.assert_called_once()
-        mock_chain_instance.delay.assert_called_once()
+        mock_gi.delay.assert_called_once_with("listing-id")
+        mock_gd.si.assert_not_called()
+        mock_pl.si.assert_not_called()
+        mock_chain_fn.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_does_not_dispatch_when_update_returns_zero(self):
@@ -79,17 +84,17 @@ class TestCategoryTaskChainDispatch:
 
         with patch("app.database.worker_session", lambda: _mock_session(mock_db)), \
              patch("app.services.category_service.CategoryService") as mock_cat_cls, \
-             patch("celery.chain") as mock_chain_fn:
+             patch("app.workers.tasks.image_tasks.generate_images") as mock_gi:
             mock_cat = AsyncMock()
             mock_cat.predict_and_save = AsyncMock()
             mock_cat_cls.return_value = mock_cat
             await _predict_category_async("listing-id")
 
-        mock_chain_fn.assert_not_called()
+        mock_gi.delay.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_does_not_dispatch_when_not_batch(self):
-        """Flow manual (created_via != 'batch') não despacha chain."""
+        """Flow manual (created_via != 'batch') não despacha generate_images."""
         from app.workers.tasks.category_tasks import _predict_category_async
 
         mock_listing = MagicMock()
@@ -108,19 +113,22 @@ class TestCategoryTaskChainDispatch:
 
         with patch("app.database.worker_session", lambda: _mock_session(mock_db)), \
              patch("app.services.category_service.CategoryService") as mock_cat_cls, \
-             patch("celery.chain") as mock_chain_fn:
+             patch("app.workers.tasks.image_tasks.generate_images") as mock_gi:
             mock_cat = AsyncMock()
             mock_cat.predict_and_save = AsyncMock()
             mock_cat_cls.return_value = mock_cat
             await _predict_category_async("listing-id")
 
-        mock_chain_fn.assert_not_called()
+        mock_gi.delay.assert_not_called()
 
 
 class TestSubmitAttributesChainDispatch:
     @pytest.mark.asyncio
-    async def test_dispatches_chain_when_batch_and_pending_description(self):
-        """submit_attributes em modo batch com pending_description despacha chain."""
+    async def test_dispatches_generate_images_when_batch_and_pending_description(self):
+        """submit_attributes em modo batch com pending_description despacha
+        generate_images.delay direto (chain de 1 elemento é ruído);
+        generate_description/publish_listing nunca são chamados por este
+        caminho e celery.chain não é usado."""
         from app.services.listing_service import ListingService
         from app.models.listing import Listing as ListingModel
 
@@ -155,19 +163,66 @@ class TestSubmitAttributesChainDispatch:
         mock_db.execute = execute_side
         mock_db.commit = AsyncMock()
 
-        mock_chain_instance = MagicMock()
-
-        with patch("celery.chain", return_value=mock_chain_instance) as mock_chain_fn:
+        with patch("app.workers.tasks.image_tasks.generate_images") as mock_gi, \
+             patch("app.workers.tasks.ai_tasks.generate_description") as mock_gd, \
+             patch("app.workers.tasks.publish_tasks.publish_listing") as mock_pl, \
+             patch("celery.chain") as mock_chain_fn:
             svc = ListingService(mock_db)
             await svc.submit_attributes(mock_listing, [])
 
-        mock_chain_fn.assert_called_once()
-        mock_chain_instance.delay.assert_called_once()
+        mock_gi.delay.assert_called_once_with("lid")
+        mock_gd.si.assert_not_called()
+        mock_pl.si.assert_not_called()
+        mock_chain_fn.assert_not_called()
+
+
+class TestSubmitAttributesReadyToPublishNaoPublicaSozinho:
+    @pytest.mark.asyncio
+    async def test_ready_to_publish_permanece_e_nao_publica(self):
+        """submit_attributes em lote, quando imagem aprovada e descrição já
+        existem (retry após erro de publicação), termina em 'ready_to_publish'
+        e NÃO despacha publish_listing. Publicação em lote é sempre ação
+        humana (trigger_publish / bulk_publish) — hoje isto vira 'publishing'
+        e chama publish_listing.delay, então este teste deve ficar vermelho."""
+        from app.services.listing_service import ListingService
+        from app.models.listing import Listing as ListingModel
+
+        mock_listing = MagicMock(spec=ListingModel)
+        mock_listing.id = "lid"
+        mock_listing.seller_id = "sid"
+        mock_listing.status = "pending_seller_attributes"
+        mock_listing.created_via = "batch"
+
+        mock_db = AsyncMock()
+        execute_calls = [0]
+
+        async def execute_side(stmt):
+            execute_calls[0] += 1
+            r = MagicMock()
+            if execute_calls[0] == 1:    # select ListingImage (approved) — existe
+                r.scalars = MagicMock(return_value=MagicMock(first=MagicMock(return_value=MagicMock())))
+                return r
+            if execute_calls[0] == 2:    # select ListingDescription — existe
+                r.scalar_one_or_none = MagicMock(return_value=MagicMock())
+                return r
+            raise AssertionError("nao deveria haver SELECT/UPDATE adicional quando ready_to_publish")
+
+        mock_db.execute = execute_side
+        mock_db.commit = AsyncMock()
+
+        with patch("app.workers.tasks.publish_tasks.publish_listing") as mock_pl:
+            svc = ListingService(mock_db)
+            await svc.submit_attributes(mock_listing, [])
+
+        assert mock_listing.status == "ready_to_publish"
+        mock_pl.delay.assert_not_called()
 
 
 class TestRemovedInternalDispatch:
-    """Garante que tasks no batch path não mais chamam .delay() internamente.
-    A chain (Task 3) é responsável por despachar os próximos steps.
+    """Garante que tasks no batch path não mais chamam .delay() internamente
+    para generate_description/publish_listing. Não existe mais chain nem
+    despacho automático de publicação em lote: publicar é sempre ação humana
+    (trigger_publish / bulk_publish).
     """
 
     # O teste do "reuse path" (imagens copiadas do indice SKU→imagem) saiu

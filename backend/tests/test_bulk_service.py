@@ -161,6 +161,33 @@ async def test_bulk_approve_images_transitions_and_dispatches():
 
 
 @pytest.mark.asyncio
+async def test_bulk_generate_images_dispatches_generate_images_only():
+    """bulk_generate_images despacha só generate_images.delay (chain de 1
+    elemento é ruído); generate_description/publish_listing nunca são
+    chamados por este caminho — publicar é sempre ação humana."""
+    db = AsyncMock()
+    seller_id = uuid.uuid4()
+    execute_result = MagicMock()
+    execute_result.rowcount = 1
+    db.execute = AsyncMock(return_value=execute_result)
+
+    svc = ListingService(db, seller_id)
+    listing_id = uuid.uuid4()
+    with patch("app.workers.tasks.image_tasks.generate_images") as mock_task, \
+         patch("app.workers.tasks.ai_tasks.generate_description") as mock_gd, \
+         patch("app.workers.tasks.publish_tasks.publish_listing") as mock_pl, \
+         patch("celery.chain") as mock_chain_fn:
+        mock_task.delay = MagicMock()
+        result = await svc.bulk_generate_images([listing_id])
+
+    assert result.processed == 1
+    mock_task.delay.assert_called_once_with(str(listing_id))
+    mock_gd.si.assert_not_called()
+    mock_pl.si.assert_not_called()
+    mock_chain_fn.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_bulk_publish_transitions_and_dispatches():
     db = AsyncMock()
     seller_id = uuid.uuid4()
