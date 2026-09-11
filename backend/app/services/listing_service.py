@@ -13,6 +13,12 @@ from app.models.listing_image import (
     PROMOTABLE_COVER_KINDS,
     ListingImage,
 )
+from app.models.listing_review_event import (
+    REVIEW_ACTION_IMAGES_APPROVED,
+    REVIEW_MODE_BULK,
+    REVIEW_MODE_INDIVIDUAL,
+    ListingReviewEvent,
+)
 from app.models.listing_job import ListingJob
 from app.models.user import User
 from app.models.seller import Seller
@@ -300,7 +306,12 @@ class ListingService:
             )
 
     async def approve_images(
-        self, listing: Listing, approved_ids: list[UUID], review_seconds: int | None = None
+        self,
+        listing: Listing,
+        approved_ids: list[UUID],
+        review_seconds: int | None = None,
+        *,
+        user_id: UUID,
     ) -> None:
         if listing.status != "pending_image_approval":
             raise HTTPException(
@@ -342,6 +353,7 @@ class ListingService:
         # `dict.fromkeys` deduplica preservando a ordem: id repetido na
         # requisicao nao pode consumir duas posicoes.
         next_order = COVER_SORT_ORDER
+        approved_count = 0
         for uid in dict.fromkeys(approved_ids):
             img = by_id.get(uid)
             if img is None:
@@ -351,6 +363,7 @@ class ListingService:
             img.approved = True
             img.sort_order = next_order
             img.status = "approved"
+            approved_count += 1
             if review_seconds is not None:
                 img.review_seconds = review_seconds
             if img.ml_picture_id:
@@ -366,6 +379,18 @@ class ListingService:
         # remocao do caminho antigo (2026-09-10) — nenhum caminho o le nem o
         # escreve. A tabela e o model ficam como registro historico dos SKUs
         # 37/38 ate decisao explicita de apagar.
+
+        # Evento de revisao humana, na MESMA transacao da aprovacao: gravado
+        # ANTES do commit que persiste `approved`/`status`, pra aprovacao sem
+        # evento (ou evento sem aprovacao) ser impossivel.
+        self.db.add(ListingReviewEvent(
+            listing_id=listing.id,
+            user_id=user_id,
+            action=REVIEW_ACTION_IMAGES_APPROVED,
+            mode=REVIEW_MODE_INDIVIDUAL,
+            approved_count=approved_count,
+            review_seconds=review_seconds,
+        ))
 
         listing.status = "generating_description"
         await self.db.commit()
@@ -475,7 +500,7 @@ class ListingService:
                 results.append(BulkItemResult(listing_id=lid, success=False, error=str(e)))
         return self._bulk_result(results)
 
-    async def bulk_approve_images(self, listing_ids: list) -> BulkResult:
+    async def bulk_approve_images(self, listing_ids: list, *, user_id) -> BulkResult:
         results: list[BulkItemResult] = []
         for lid in listing_ids:
             try:
@@ -501,7 +526,7 @@ class ListingService:
                 # do mesmo slot de colidirem no indice unico
                 # `uq_listing_images_cover_slot`: a reprovada simplesmente nao
                 # entra no UPDATE e continua `approved=False`.
-                await self.db.execute(
+                update_result = await self.db.execute(
                     sa_update(ListingImage)
                     .where(
                         ListingImage.listing_id == lid,
@@ -511,6 +536,22 @@ class ListingService:
                     .values(approved=True)
                     .execution_options(synchronize_session=False)
                 )
+
+                # Evento de revisao humana, na MESMA transacao da aprovacao —
+                # mesma regra do individual, so que `mode="bulk"` e
+                # `review_seconds` sempre NULL (nunca estima/reparte tempo).
+                # Se o UPDATE acima estourar o indice unico de slot (capa/
+                # ficha duplicada), a excecao interrompe antes daqui e o
+                # `except` abaixo faz rollback — nem evento, nem aprovacao.
+                self.db.add(ListingReviewEvent(
+                    listing_id=listing.id,
+                    user_id=user_id,
+                    action=REVIEW_ACTION_IMAGES_APPROVED,
+                    mode=REVIEW_MODE_BULK,
+                    approved_count=update_result.rowcount,
+                    review_seconds=None,
+                ))
+
                 listing.status = "generating_description"
                 await self.db.commit()
                 from app.workers.tasks.ai_tasks import generate_description

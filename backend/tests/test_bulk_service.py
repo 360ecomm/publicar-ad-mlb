@@ -149,11 +149,12 @@ async def test_bulk_approve_images_transitions_and_dispatches():
         scalar_one_or_none=MagicMock(return_value=listing),
         rowcount=1,
     ))
+    db.add = MagicMock()
 
     svc = ListingService(db, seller_id)
     with patch("app.workers.tasks.ai_tasks.generate_description") as mock_task:
         mock_task.delay = MagicMock()
-        result = await svc.bulk_approve_images([listing.id])
+        result = await svc.bulk_approve_images([listing.id], user_id=uuid.uuid4())
 
     assert result.processed == 1
     assert listing.status == "generating_description"
@@ -227,11 +228,12 @@ async def test_bulk_approve_images_exclui_candidatas_por_posicao_nao_por_kind():
         return MagicMock(scalar_one_or_none=MagicMock(return_value=listing), rowcount=1)
 
     db.execute = execute_side
+    db.add = MagicMock()
 
     svc = ListingService(db, seller_id)
     with patch("app.workers.tasks.ai_tasks.generate_description") as mock_task:
         mock_task.delay = MagicMock()
-        await svc.bulk_approve_images([listing.id])
+        await svc.bulk_approve_images([listing.id], user_id=uuid.uuid4())
 
     update_sql = str(statements[1])
     assert "UPDATE listing_images" in update_sql, update_sql

@@ -60,6 +60,11 @@ def _approve_db(images):
     result.scalars.return_value.all.return_value = images
     db.execute = AsyncMock(return_value=result)
     db.commit = AsyncMock()
+    # `add` e' sincrono (nunca `await self.db.add(...)`); sem isto, o filho
+    # generico de `AsyncMock()` tambem vira AsyncMock e a chamada sincrona do
+    # servico deixa uma coroutine sem await (RuntimeWarning ruidoso, sem
+    # afetar o resultado do teste).
+    db.add = MagicMock()
     return db
 
 
@@ -75,7 +80,7 @@ class TestApproveImagesReservesCoverPosition:
         b = _img(listing.id, "card_benefits")
         db = _approve_db([a, b])
 
-        await ListingService(db).approve_images(listing, [a.id, b.id])
+        await ListingService(db).approve_images(listing, [a.id, b.id], user_id=uuid4())
 
         assert a.sort_order == 1, "nenhuma foto que nao seja capa pode cair em 0"
         assert b.sort_order == 2, "a ordem escolhida pelo operador e preservada"
@@ -88,7 +93,7 @@ class TestApproveImagesReservesCoverPosition:
         foto = _img(listing.id, "individual")
         db = _approve_db([capa, foto])
 
-        await ListingService(db).approve_images(listing, [capa.id, foto.id])
+        await ListingService(db).approve_images(listing, [capa.id, foto.id], user_id=uuid4())
 
         assert capa.sort_order == COVER_SORT_ORDER
         assert foto.sort_order == 1
@@ -101,7 +106,7 @@ class TestApproveImagesReservesCoverPosition:
         capa = _img(listing.id, "cover_ai")
         db = _approve_db([foto, capa])
 
-        await ListingService(db).approve_images(listing, [foto.id, capa.id])
+        await ListingService(db).approve_images(listing, [foto.id, capa.id], user_id=uuid4())
 
         assert (foto.sort_order, capa.sort_order) == (1, 2)
         assert _at_cover([foto, capa]) == []
@@ -113,7 +118,7 @@ class TestApproveImagesReservesCoverPosition:
         foto = _img(listing.id, "individual")
         db = _approve_db([capa, foto])
 
-        await ListingService(db).approve_images(listing, [capa.id, capa.id, foto.id])
+        await ListingService(db).approve_images(listing, [capa.id, capa.id, foto.id], user_id=uuid4())
 
         assert foto.sort_order == 1, "o id duplicado nao pode abrir um buraco"
 
@@ -123,7 +128,7 @@ class TestApproveImagesReservesCoverPosition:
         capa = _img(listing.id, "cover_deterministic")
         db = _approve_db([capa])
 
-        await ListingService(db).approve_images(listing, [uuid4(), capa.id])
+        await ListingService(db).approve_images(listing, [uuid4(), capa.id], user_id=uuid4())
 
         assert capa.sort_order == COVER_SORT_ORDER
         assert capa.approved is True
@@ -146,7 +151,7 @@ class TestInvariantHoldsThroughPromotion:
         galeria = [foto1, foto2, variante]
 
         db = _approve_db(galeria)
-        await ListingService(db).approve_images(listing, [foto1.id, foto2.id])
+        await ListingService(db).approve_images(listing, [foto1.id, foto2.id], user_id=uuid4())
 
         # Reproduz o filtro SQL de `promote_cover` (sort_order=0 E kind de capa
         # E != alvo) sobre o estado REAL deixado por `approve_images`. E isto

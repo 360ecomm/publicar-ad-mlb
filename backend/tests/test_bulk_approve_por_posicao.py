@@ -47,7 +47,10 @@ async def _semear(session_maker, linhas):
     batch) e as ListingImage descritas em `linhas`: cada item e' uma tupla
     `(kind, sort_order, ml_picture_id, status)`. Todas nascem
     `approved=False` — quem decide o que fica aprovado e' `bulk_approve_images`,
-    nao a semeadura."""
+    nao a semeadura. Devolve `(listing_id, seller_id, user_id)`: `user_id` e'
+    o dono do evento de revisao gravado por `bulk_approve_images` — precisa
+    ser o de um usuario que existe de verdade, senao a FK de
+    `listing_review_events.user_id` estoura."""
     from app.models.listing import Listing
     from app.models.listing_image import ListingImage
     from app.models.seller import Seller
@@ -86,7 +89,7 @@ async def _semear(session_maker, linhas):
         ]
         s.add_all(rows)
         await s.commit()
-        return listing.id, seller.id
+        return listing.id, seller.id, user.id
 
 
 def _linhas_padrao(cover_kind: str) -> list[tuple]:
@@ -115,13 +118,13 @@ async def _rodar_e_verificar(cover_kind: str):
 
     engine, sm = await _preparar_banco()
     try:
-        listing_id, seller_id = await _semear(sm, _linhas_padrao(cover_kind))
+        listing_id, seller_id, user_id = await _semear(sm, _linhas_padrao(cover_kind))
 
         async with sm() as s:
             svc = ListingService(s, seller_id)
             with patch("app.workers.tasks.ai_tasks.generate_description") as mock_task:
                 mock_task.delay = MagicMock()
-                result = await svc.bulk_approve_images([listing_id])
+                result = await svc.bulk_approve_images([listing_id], user_id=user_id)
 
             assert result.processed == 1, result
 
@@ -208,13 +211,13 @@ class TestBulkApproveImagesRespeitaMlPictureId:
 
         engine, sm = await _preparar_banco()
         try:
-            listing_id, seller_id = await _semear(sm, linhas)
+            listing_id, seller_id, user_id = await _semear(sm, linhas)
 
             async with sm() as s:
                 svc = ListingService(s, seller_id)
                 with patch("app.workers.tasks.ai_tasks.generate_description") as mock_task:
                     mock_task.delay = MagicMock()
-                    result = await svc.bulk_approve_images([listing_id])
+                    result = await svc.bulk_approve_images([listing_id], user_id=user_id)
 
                 assert result.processed == 1, result.results
 
@@ -273,13 +276,13 @@ class TestBulkApproveImagesRespeitaMlPictureId:
 
         engine, sm = await _preparar_banco()
         try:
-            listing_id, seller_id = await _semear(sm, linhas)
+            listing_id, seller_id, user_id = await _semear(sm, linhas)
 
             async with sm() as s:
                 svc = ListingService(s, seller_id)
                 with patch("app.workers.tasks.ai_tasks.generate_description") as mock_task:
                     mock_task.delay = MagicMock()
-                    result = await svc.bulk_approve_images([listing_id])
+                    result = await svc.bulk_approve_images([listing_id], user_id=user_id)
 
                 assert result.processed == 1, result.results
 

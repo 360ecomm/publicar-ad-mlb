@@ -88,10 +88,11 @@ class TestApproveImagesLoteTerminaEmReadyToPublish:
 
         mock_db.execute = execute_side
         mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
 
         with patch("app.workers.tasks.ai_tasks.generate_description") as mock_gen_desc:
             svc = ListingService(mock_db, mock_listing.seller_id)
-            await svc.approve_images(mock_listing, [mock_img.id])
+            await svc.approve_images(mock_listing, [mock_img.id], user_id=uuid.uuid4())
 
         # Etapa 1: aprovação de imagem avança para generating_description e
         # despacha generate_description com o id do listing.
@@ -131,10 +132,11 @@ class TestBulkApproveImagesLoteTerminaEmReadyToPublish:
 
         mock_db.execute = execute_side
         mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
 
         with patch("app.workers.tasks.ai_tasks.generate_description") as mock_gen_desc:
             svc = ListingService(mock_db, mock_listing.seller_id)
-            result = await svc.bulk_approve_images([mock_listing.id])
+            result = await svc.bulk_approve_images([mock_listing.id], user_id=uuid.uuid4())
 
         assert result.processed == 1
         assert mock_listing.status == "generating_description"

@@ -215,10 +215,11 @@ async def approve_images(
     body: ImageApproveRequest,
     active_seller=Depends(get_active_seller),
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
-    await svc.approve_images(listing, body.approved_ids, body.review_seconds)
+    await svc.approve_images(listing, body.approved_ids, body.review_seconds, user_id=current_user.id)
     return ListingSummary.model_validate(listing)
 
 

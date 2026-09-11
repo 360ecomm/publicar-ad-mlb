@@ -377,6 +377,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `listing_title.py` — ListingTitle
 - `listing_attribute.py` — ListingAttribute (allowed_values JSONB, is_required, source)
 - `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order)
+- `listing_review_event.py` — ListingReviewEvent (listing_id, user_id, action, mode, approved_count, review_seconds, created_at) — 1 linha por aprovação humana de imagens, imutável (sem `updated_at`)
 - `listing_description.py` — ListingDescription
 - `listing_job.py` — ListingJob
 - `product_image.py` — ProductImage (seller_id, sku, ml_picture_id, is_approved) — índice SKU→imagem. **Sem escrita nem leitura desde 2026-09-10**; fica como registro histórico dos SKUs 37/38 até decisão de apagar
@@ -464,7 +465,9 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `3d8f1b2c9e47` — índices únicos parciais dos slots de capa e ficha (`uq_listing_images_cover_slot` / `_specs_slot`)
 - `5a1c7e2d9b04` — `listing_images.asset_key` (referência dos bytes no bucket R2 de ativos)
 - `7b2d9f4e1c58` — drop de `listing_images.image_bytes`. **Só rodar depois de** `scripts/migrate_image_bytes_to_r2.py` e de backup da tabela
-- `8e3a5c1d7f92` — remove o write-back por seller (RF7): `seller_image_configs.write_*`, `listing_images.r2_write_status` e `url_r2` (head atual). Ver `docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md`
+- `8e3a5c1d7f92` — remove o write-back por seller (RF7): `seller_image_configs.write_*`, `listing_images.r2_write_status` e `url_r2`. Ver `docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md`
+- `9f4c2b7e1d63` — kind `presentation` → `presentation_ai` em `listing_images` (só dados, sem mudança de schema)
+- `b3e7a1c9d5f2` — cria `listing_review_events` (head atual)
 
 ---
 
@@ -531,6 +534,12 @@ listing para em `pending_image_approval` e nada é enfileirado depois da
 geração: a descrição só nasce da aprovação humana (`images/approve` ou
 `bulk/approve`), e a publicação só de `pipeline/publish` ou `bulk/publish`.
 Não existe mais nenhum caminho que publique sem revisão humana das imagens.
+
+**Toda aprovação humana grava 1 linha em `listing_review_events`**, na mesma
+transação da aprovação: individual (`images/approve`) guarda o
+`review_seconds` recebido do operador (pode ser `None`); em massa
+(`bulk/approve-images`) grava sempre `review_seconds=NULL` e `mode="bulk"` —
+nunca estima nem reparte tempo entre os anúncios do lote.
 
 > **Vertical seria destrutivo aqui.** `normalize_to_square` **recorta o
 > centro**, não adiciona borda: um canvas 3:4 perderia o painel de texto das

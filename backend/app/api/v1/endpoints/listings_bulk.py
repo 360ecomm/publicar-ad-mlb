@@ -101,7 +101,7 @@ async def bulk_approve_images(
     current_user: User = Depends(get_current_user),
     active_seller: Seller = Depends(get_active_seller),
 ):
-    return await _svc(db, active_seller).bulk_approve_images(payload.listing_ids)
+    return await _svc(db, active_seller).bulk_approve_images(payload.listing_ids, user_id=current_user.id)
 
 
 @router.post("/generate-images", response_model=BulkResult)

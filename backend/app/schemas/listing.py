@@ -2,7 +2,7 @@ from decimal import Decimal
 from typing import Optional, Any, Literal
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class ListingCreate(BaseModel):
@@ -122,8 +122,10 @@ class ImageApproveRequest(BaseModel):
     approved_ids: list[UUID]
     # Tempo (segundos) que um humano levou comparando a imagem gerada por IA
     # contra o dado real antes de aprovar. Opcional: ausente -> fica NULL,
-    # comportamento identico ao de antes deste campo existir.
-    review_seconds: Optional[int] = None
+    # comportamento identico ao de antes deste campo existir. `ge=0`: tempo
+    # negativo nao existe, e o valor cai direto em `review_seconds` do
+    # evento de revisao.
+    review_seconds: Optional[int] = Field(default=None, ge=0)
 
 
 class ListingDetail(ListingSummary):

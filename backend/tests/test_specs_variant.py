@@ -267,6 +267,10 @@ def _make_approve_db(images):
     result.scalars.return_value.all.return_value = images
     db.execute = AsyncMock(return_value=result)
     db.commit = AsyncMock()
+    # `add` e' sincrono; sem isto o filho generico de `AsyncMock()` tambem
+    # vira AsyncMock e a chamada sincrona do servico (evento de revisao)
+    # deixa uma coroutine sem await.
+    db.add = MagicMock()
     return db
 
 
@@ -290,7 +294,7 @@ class TestApproveImagesReviewSeconds:
         db = _make_approve_db([approved_img, rejected_img])
         svc = ListingService(db)
 
-        await svc.approve_images(listing, [approved_img.id], review_seconds=42)
+        await svc.approve_images(listing, [approved_img.id], review_seconds=42, user_id=uuid4())
 
         assert approved_img.review_seconds == 42
         assert approved_img.approved is True
@@ -312,7 +316,7 @@ class TestApproveImagesReviewSeconds:
         db = _make_approve_db([approved_img])
         svc = ListingService(db)
 
-        await svc.approve_images(listing, [approved_img.id])
+        await svc.approve_images(listing, [approved_img.id], user_id=uuid4())
 
         assert approved_img.review_seconds is None
         assert approved_img.approved is True
