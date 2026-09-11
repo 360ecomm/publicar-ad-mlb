@@ -148,18 +148,22 @@ services:
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q default,images,ai,publish
 
   # ── Celery Beat (agendador) ──────────────────────────────
-  # ATENCAO: `celery_app.py` nao define `beat_schedule` nenhum hoje — nao ha
-  # tarefa periodica no sistema. Este servico sobe um agendador vazio. Esta
-  # aqui para o dia em que existir tarefa agendada; se a VPS estiver apertada
-  # de memoria, e o primeiro candidato a ficar de fora sem perda funcional.
+  # Desde 2026-09-10 o beat TEM trabalho: `celery_app.py` agenda
+  # `check-pending-raw-photos` e `check-pending-ai-engine` a cada 15 min, que
+  # retomam listings parados em `pending_raw_photos` (fotos chegaram ao
+  # bucket) e `pending_ai_engine` (motor OpenAI voltou). Desligar este
+  # servico NAO da erro em lugar nenhum: os standbys simplesmente nunca mais
+  # sao retomados sozinhos, so pelos endpoints manuais. Nao e candidato a
+  # sair da stack por memoria.
   celery_beat:
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
     restart: unless-stopped
-    # 128M: medicao ociosa deu 42MiB e o beat nao tem tarefa nenhuma hoje —
-    # so carrega o app Celery e dorme. Teto baixo de proposito: se este
-    # container crescer, e sintoma de bug, nao de carga.
+    # 128M: o beat so ENVIA duas mensagens a cada 15 min; quem executa as
+    # tarefas e o celery_worker. Medido em producao em 2026-09-11, ja com as
+    # duas tarefas agendadas: 42.69MiB (33% do teto). Teto baixo de
+    # proposito: se este container crescer, e sintoma de bug, nao de carga.
     mem_limit: 128m
     # Sem `ports:`.
     env_file:
