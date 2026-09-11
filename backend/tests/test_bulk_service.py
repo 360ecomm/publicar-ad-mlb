@@ -237,3 +237,4 @@ async def test_bulk_approve_images_exclui_candidatas_por_posicao_nao_por_kind():
     assert "UPDATE listing_images" in update_sql, update_sql
     assert "listing_images.sort_order <" in update_sql, update_sql
     assert "listing_images.kind" not in update_sql, update_sql
+    assert "listing_images.ml_picture_id IS NOT NULL" in update_sql, update_sql

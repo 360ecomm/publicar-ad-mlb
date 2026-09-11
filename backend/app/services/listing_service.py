@@ -486,19 +486,27 @@ class ListingService:
                 if not listing or listing.status != "pending_image_approval":
                     results.append(BulkItemResult(listing_id=lid, success=False, error="estado inválido"))
                     continue
-                # Candidatas de IA sob demanda (sort_order >= CANDIDATE_SORT_ORDER_FLOOR)
-                # ficam de fora: elas nascem `approved=False` de proposito e
-                # so viram capa/ficha por acao humana explicita
-                # (`promote_cover`/`promote_specs`). O filtro e' por POSICAO,
-                # nao por `kind` — `cover_ai`/`specs_ai` sao os MESMOS kinds
-                # das posicoes oficiais 0 e 4, entao um filtro por kind
-                # deixaria a capa e a ficha oficiais de fora da aprovacao.
-                # Ver a docstring de `CANDIDATE_SORT_ORDER_FLOOR`.
+                # Aprova o que esta na galeria E subiu ao ML — mesmo criterio
+                # da publicacao (`publish_service` so manda `approved and
+                # ml_picture_id`). Candidatas de IA sob demanda
+                # (sort_order >= CANDIDATE_SORT_ORDER_FLOOR) ficam de fora: elas
+                # nascem `approved=False` de proposito e so viram capa/ficha por
+                # acao humana explicita (`promote_cover`/`promote_specs`). O
+                # filtro de posicao e' por POSICAO, nao por `kind` — `cover_ai`/
+                # `specs_ai` sao os MESMOS kinds das posicoes oficiais 0 e 4,
+                # entao um filtro por kind deixaria a capa e a ficha oficiais de
+                # fora da aprovacao. Ver a docstring de `CANDIDATE_SORT_ORDER_FLOOR`.
+                # `ml_picture_id IS NOT NULL` e' o que impede a capa reprovada no
+                # QA (que fica `ml_picture_id=None`) e o fallback determinístico
+                # do mesmo slot de colidirem no indice unico
+                # `uq_listing_images_cover_slot`: a reprovada simplesmente nao
+                # entra no UPDATE e continua `approved=False`.
                 await self.db.execute(
                     sa_update(ListingImage)
                     .where(
                         ListingImage.listing_id == lid,
                         ListingImage.sort_order < CANDIDATE_SORT_ORDER_FLOOR,
+                        ListingImage.ml_picture_id.isnot(None),
                     )
                     .values(approved=True)
                     .execution_options(synchronize_session=False)

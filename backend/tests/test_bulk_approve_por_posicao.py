@@ -20,12 +20,14 @@ _precisa_db = pytest.mark.skipif(
 )
 
 
-async def _semear(session_maker, cover_kind: str):
+async def _semear(session_maker, linhas):
     """1 user, 1 seller, 1 listing em pending_image_approval (created_via
-    batch) e 7 ListingImage: as 5 posicoes oficiais (0..4, `cover_kind`/0) e
-    2 candidatas (cover_ai/90, specs_ai/91). Todas approved=False."""
+    batch) e as ListingImage descritas em `linhas`: cada item e' uma tupla
+    `(kind, sort_order, ml_picture_id, status)`. Todas nascem
+    `approved=False` — quem decide o que fica aprovado e' `bulk_approve_images`,
+    nao a semeadura."""
     from app.models.listing import Listing
-    from app.models.listing_image import COVER_AI_KIND, ListingImage, SPECS_AI_KIND
+    from app.models.listing_image import ListingImage
     from app.models.seller import Seller
     from app.models.user import User
 
@@ -55,27 +57,31 @@ async def _semear(session_maker, cover_kind: str):
         s.add(listing)
         await s.flush()
 
-        posicoes = [
-            ListingImage(listing_id=listing.id, ml_picture_id="p0", status="uploaded",
-                         approved=False, sort_order=0, kind=cover_kind),
-            ListingImage(listing_id=listing.id, ml_picture_id="p1", status="uploaded",
-                         approved=False, sort_order=1, kind="presentation"),
-            ListingImage(listing_id=listing.id, ml_picture_id="p2", status="uploaded",
-                         approved=False, sort_order=2, kind="benefits_ai"),
-            ListingImage(listing_id=listing.id, ml_picture_id="p3", status="uploaded",
-                         approved=False, sort_order=3, kind="detail_ai"),
-            ListingImage(listing_id=listing.id, ml_picture_id="p4", status="uploaded",
-                         approved=False, sort_order=4, kind=SPECS_AI_KIND),
+        rows = [
+            ListingImage(listing_id=listing.id, ml_picture_id=ml_picture_id, status=status,
+                         approved=False, sort_order=sort_order, kind=kind)
+            for (kind, sort_order, ml_picture_id, status) in linhas
         ]
-        candidatas = [
-            ListingImage(listing_id=listing.id, ml_picture_id="c90", status="uploaded",
-                         approved=False, sort_order=90, kind=COVER_AI_KIND),
-            ListingImage(listing_id=listing.id, ml_picture_id="c91", status="uploaded",
-                         approved=False, sort_order=91, kind=SPECS_AI_KIND),
-        ]
-        s.add_all(posicoes + candidatas)
+        s.add_all(rows)
         await s.commit()
         return listing.id, seller.id
+
+
+def _linhas_padrao(cover_kind: str) -> list[tuple]:
+    """As 5 posicoes oficiais (0..4, `cover_kind`/0) e 2 candidatas
+    (cover_ai/90, specs_ai/91), todas com `ml_picture_id` preenchido e
+    `status="uploaded"` — o caso feliz, sem reprovacao de QA."""
+    from app.models.listing_image import COVER_AI_KIND, SPECS_AI_KIND
+
+    return [
+        (cover_kind, 0, "p0", "uploaded"),
+        ("presentation", 1, "p1", "uploaded"),
+        ("benefits_ai", 2, "p2", "uploaded"),
+        ("detail_ai", 3, "p3", "uploaded"),
+        (SPECS_AI_KIND, 4, "p4", "uploaded"),
+        (COVER_AI_KIND, 90, "c90", "uploaded"),
+        (SPECS_AI_KIND, 91, "c91", "uploaded"),
+    ]
 
 
 async def _rodar_e_verificar(cover_kind: str):
@@ -94,7 +100,7 @@ async def _rodar_e_verificar(cover_kind: str):
         await conn.run_sync(Base.metadata.create_all)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        listing_id, seller_id = await _semear(sm, cover_kind)
+        listing_id, seller_id = await _semear(sm, _linhas_padrao(cover_kind))
 
         async with sm() as s:
             svc = ListingService(s, seller_id)
@@ -145,3 +151,157 @@ class TestBulkApproveImagesPorPosicao:
         from app.models.listing_image import COVER_DETERMINISTIC_KIND
 
         await _rodar_e_verificar(cover_kind=COVER_DETERMINISTIC_KIND)
+
+
+@_precisa_db
+class TestBulkApproveImagesRespeitaMlPictureId:
+    """`bulk_approve_images` usa o MESMO criterio da publicacao
+    (`publish_service` so manda `approved and ml_picture_id`): aprovar uma
+    linha que nunca subiu ao ML e' aprovar um item que nunca sera' enviado —
+    e no caso da capa, colide com o fallback no mesmo slot."""
+
+    @pytest.mark.asyncio
+    async def test_capa_reprovada_no_qa_mais_fallback_so_aprova_o_fallback(self):
+        """Reproduz o que o worker grava de verdade quando a capa por IA
+        reprova no QA de fundo branco (`image_tasks.py:338-342`): a linha
+        `cover_ai`/0 fica com `ml_picture_id=None` e
+        `status="validation_failed"`; o fallback `cover_deterministic`/0 e'
+        quem tem `ml_picture_id`. Aprovar as duas linhas de sort_order 0
+        estoura o indice unico `uq_listing_images_cover_slot` — so a linha
+        com `ml_picture_id` pode ser aprovada."""
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        import app.models  # noqa: F401 — registra todas as tabelas
+        from app.models.base import Base
+        from app.models.listing import Listing
+        from app.models.listing_image import (
+            COVER_AI_KIND,
+            COVER_DETERMINISTIC_KIND,
+            ListingImage,
+            SPECS_AI_KIND,
+        )
+        from app.services.listing_service import ListingService
+
+        linhas = [
+            (COVER_AI_KIND, 0, None, "validation_failed"),
+            (COVER_DETERMINISTIC_KIND, 0, "pcd", "uploaded"),
+            ("presentation", 1, "p1", "uploaded"),
+            ("benefits_ai", 2, "p2", "uploaded"),
+            ("detail_ai", 3, "p3", "uploaded"),
+            (SPECS_AI_KIND, 4, "p4", "uploaded"),
+            (COVER_AI_KIND, 90, "c90", "uploaded"),
+            (SPECS_AI_KIND, 91, "c91", "uploaded"),
+        ]
+
+        engine = create_async_engine(TEST_DB)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            listing_id, seller_id = await _semear(sm, linhas)
+
+            async with sm() as s:
+                svc = ListingService(s, seller_id)
+                with patch("app.workers.tasks.ai_tasks.generate_description") as mock_task:
+                    mock_task.delay = MagicMock()
+                    result = await svc.bulk_approve_images([listing_id])
+
+                assert result.processed == 1, result.results
+
+                s.expire_all()
+                rows = (
+                    await s.execute(
+                        select(ListingImage)
+                        .where(ListingImage.listing_id == listing_id)
+                        .order_by(ListingImage.sort_order, ListingImage.kind)
+                    )
+                ).scalars().all()
+
+                aprovadas_pos0 = [r for r in rows if r.sort_order == 0 and r.approved]
+                assert len(aprovadas_pos0) == 1, [(r.kind, r.approved) for r in rows if r.sort_order == 0]
+                assert aprovadas_pos0[0].kind == COVER_DETERMINISTIC_KIND
+
+                reprovada = next(r for r in rows if r.sort_order == 0 and r.kind == COVER_AI_KIND)
+                assert reprovada.approved is False, reprovada.approved
+
+                for pos in (1, 2, 3, 4):
+                    row = next(r for r in rows if r.sort_order == pos)
+                    assert row.approved is True, f"posicao {pos} deveria estar aprovada"
+                for pos in (90, 91):
+                    row = next(r for r in rows if r.sort_order == pos)
+                    assert row.approved is False, f"candidata {pos} NAO deveria estar aprovada"
+
+                s.expire_all()
+                listing = (await s.execute(select(Listing).where(Listing.id == listing_id))).scalar_one()
+                assert listing.status == "generating_description", listing.status
+
+                mock_task.delay.assert_called_once_with(str(listing_id))
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_posicao_do_meio_reprovada_no_qa_nao_e_aprovada(self):
+        """`benefits_ai`/2 reprovada no QA (`ml_picture_id=None`,
+        `status="validation_failed"`) continua `approved=False` depois da
+        aprovacao em massa; as outras 4 posicoes oficiais aprovam
+        normalmente e as candidatas seguem de fora."""
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        import app.models  # noqa: F401 — registra todas as tabelas
+        from app.models.base import Base
+        from app.models.listing import Listing
+        from app.models.listing_image import COVER_AI_KIND, ListingImage, SPECS_AI_KIND
+        from app.services.listing_service import ListingService
+
+        linhas = [
+            (COVER_AI_KIND, 0, "p0", "uploaded"),
+            ("presentation", 1, "p1", "uploaded"),
+            ("benefits_ai", 2, None, "validation_failed"),
+            ("detail_ai", 3, "p3", "uploaded"),
+            (SPECS_AI_KIND, 4, "p4", "uploaded"),
+            (COVER_AI_KIND, 90, "c90", "uploaded"),
+            (SPECS_AI_KIND, 91, "c91", "uploaded"),
+        ]
+
+        engine = create_async_engine(TEST_DB)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            listing_id, seller_id = await _semear(sm, linhas)
+
+            async with sm() as s:
+                svc = ListingService(s, seller_id)
+                with patch("app.workers.tasks.ai_tasks.generate_description") as mock_task:
+                    mock_task.delay = MagicMock()
+                    result = await svc.bulk_approve_images([listing_id])
+
+                assert result.processed == 1, result.results
+
+                s.expire_all()
+                rows = (
+                    await s.execute(
+                        select(ListingImage)
+                        .where(ListingImage.listing_id == listing_id)
+                        .order_by(ListingImage.sort_order)
+                    )
+                ).scalars().all()
+                por_posicao = {r.sort_order: r.approved for r in rows}
+
+                assert por_posicao[2] is False, f"benefits_ai reprovada nao deveria estar aprovada: {por_posicao}"
+                for pos in (0, 1, 3, 4):
+                    assert por_posicao[pos] is True, f"posicao {pos} deveria estar aprovada: {por_posicao}"
+                for pos in (90, 91):
+                    assert por_posicao[pos] is False, f"candidata {pos} NAO deveria estar aprovada: {por_posicao}"
+
+                s.expire_all()
+                listing = (await s.execute(select(Listing).where(Listing.id == listing_id))).scalar_one()
+                assert listing.status == "generating_description", listing.status
+
+                mock_task.delay.assert_called_once_with(str(listing_id))
+        finally:
+            await engine.dispose()

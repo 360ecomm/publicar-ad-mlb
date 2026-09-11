@@ -72,6 +72,13 @@ PROMOTABLE_SPECS_KINDS = frozenset({CARD_SPECS_KIND, SPECS_AI_KIND})
 # batch, `bulk_approve_images`) TEM de exclui-las pela POSICAO: aprovado +
 # `ml_picture_id` e o filtro que monta o payload de fotos da publicacao,
 # entao uma candidata aprovada por engano vai ao ar no anuncio real.
+#
+# `bulk_approve_images` usa o MESMO criterio `aprovado + ml_picture_id` na
+# outra ponta: o UPDATE so aprova quem, alem de estar na galeria
+# (`sort_order < CANDIDATE_SORT_ORDER_FLOOR`), tem `ml_picture_id` preenchido.
+# Uma posicao que reprovou no QA (worker grava `ml_picture_id=None`) fica de
+# fora e continua `approved=False` — e' o que evita aprovar, no mesmo slot,
+# tanto a linha reprovada quanto o fallback que a substituiu.
 CANDIDATE_SORT_ORDER_FLOOR = 90
 
 
