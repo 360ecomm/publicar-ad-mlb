@@ -175,8 +175,10 @@ class TestRemovedInternalDispatch:
     # tests/test_sem_reuso_de_imagem.py.
 
     @pytest.mark.asyncio
-    async def test_generate_description_batch_does_not_call_publish_listing_delay(self):
-        """generate_description em batch seta status 'publishing' mas NÃO despacha publish_listing."""
+    async def test_generate_description_batch_termina_em_ready_to_publish(self):
+        """generate_description em batch termina em 'ready_to_publish', igual ao fluxo manual,
+        e NÃO despacha publish_listing. Publicação em lote só acontece por ação humana
+        (trigger_publish / bulk_publish)."""
         from app.workers.tasks.ai_tasks import _generate_description_async
 
         mock_listing = MagicMock()
@@ -215,4 +217,5 @@ class TestRemovedInternalDispatch:
             await _generate_description_async("lid")
 
         mock_pl.delay.assert_not_called()
-        assert mock_listing.status == "publishing"
+        mock_pl.si.assert_not_called()
+        assert mock_listing.status == "ready_to_publish"

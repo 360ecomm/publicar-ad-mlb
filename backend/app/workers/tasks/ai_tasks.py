@@ -124,12 +124,8 @@ async def _generate_description_async(listing_id: str) -> dict:
         else:
             db.add(ListingDescription(listing_id=listing.id, description_html=description_html))
 
-        if listing.created_via == "batch":
-            listing.status = "publishing"
-            await db.commit()
-        else:
-            listing.status = "ready_to_publish"
-            await db.commit()
+        listing.status = "ready_to_publish"
+        await db.commit()
 
     return {"listing_id": listing_id}
 
