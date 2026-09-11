@@ -524,9 +524,13 @@ listing vai para `pending_raw_photos` (ver `raw_photo_standby_service`).
 **Candidata é posição, não kind.** As candidatas das Frentes A e B nascem em
 `sort_order` 90/91 (`CANDIDATE_SORT_ORDER_FLOOR = 90`) com os **mesmos**
 kinds `cover_ai`/`specs_ai` das posições 0 e 4 oficiais, então o kind não
-distingue nada. `bulk_approve_images` aprova tudo com `sort_order < 90` e
-deixa 90/91 como estão; um filtro por kind deixaria a capa e a ficha oficiais
-de fora e publicaria 3 de 5 imagens.
+distingue nada. `bulk_approve_images` aprova o que tem `sort_order < 90`
+**e** `ml_picture_id` preenchido — o mesmo critério que a publicação usa para
+montar `pictures` — e deixa 90/91 como estão. A segunda condição existe
+porque uma posição reprovada no QA fica sem `ml_picture_id`: aprová-la
+colidiria com o fallback no índice único do slot (`uq_listing_images_*_slot`).
+Um filtro por kind deixaria a capa e a ficha oficiais de fora e publicaria
+3 de 5 imagens.
 
 Canvas vem de `PositionProfile.canvas` — não de constante do worker. Cada
 posição é independente, com 2 tentativas; falha em uma não derruba as
