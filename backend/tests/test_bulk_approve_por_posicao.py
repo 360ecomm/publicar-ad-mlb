@@ -20,6 +20,28 @@ _precisa_db = pytest.mark.skipif(
 )
 
 
+async def _preparar_banco():
+    """Cria o engine do banco dedicado (`_engine_dedicado`, que valida o
+    nome do banco ANTES de conectar e le `TEST_DATABASE_URL` sozinho — nunca
+    recebe a URL como argumento, pra ela nunca virar uma variavel nomeada
+    que um traceback com locals imprimiria em texto claro), zera o schema e
+    devolve `(engine, session_maker)`. Quem chama e' responsavel por
+    `await engine.dispose()` num `finally`."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests._pg_dedicado import _engine_dedicado
+
+    import app.models  # noqa: F401 — registra todas as tabelas
+    from app.models.base import Base
+
+    engine = _engine_dedicado()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    return engine, sm
+
+
 async def _semear(session_maker, linhas):
     """1 user, 1 seller, 1 listing em pending_image_approval (created_via
     batch) e as ListingImage descritas em `linhas`: cada item e' uma tupla
@@ -86,21 +108,12 @@ def _linhas_padrao(cover_kind: str) -> list[tuple]:
 
 async def _rodar_e_verificar(cover_kind: str):
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from tests._pg_dedicado import _engine_dedicado
-
-    import app.models  # noqa: F401 — registra todas as tabelas
-    from app.models.base import Base
     from app.models.listing import Listing
     from app.models.listing_image import ListingImage
     from app.services.listing_service import ListingService
 
-    engine = _engine_dedicado(TEST_DB)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, expire_on_commit=False)
+    engine, sm = await _preparar_banco()
     try:
         listing_id, seller_id = await _semear(sm, _linhas_padrao(cover_kind))
 
@@ -172,12 +185,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
         estoura o indice unico `uq_listing_images_cover_slot` — so a linha
         com `ml_picture_id` pode ser aprovada."""
         from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        from tests._pg_dedicado import _engine_dedicado
-
-        import app.models  # noqa: F401 — registra todas as tabelas
-        from app.models.base import Base
         from app.models.listing import Listing
         from app.models.listing_image import (
             COVER_AI_KIND,
@@ -198,11 +206,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
             (SPECS_AI_KIND, 91, "c91", "uploaded"),
         ]
 
-        engine = _engine_dedicado(TEST_DB)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-        sm = async_sessionmaker(engine, expire_on_commit=False)
+        engine, sm = await _preparar_banco()
         try:
             listing_id, seller_id = await _semear(sm, linhas)
 
@@ -252,12 +256,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
         aprovacao em massa; as outras 4 posicoes oficiais aprovam
         normalmente e as candidatas seguem de fora."""
         from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        from tests._pg_dedicado import _engine_dedicado
-
-        import app.models  # noqa: F401 — registra todas as tabelas
-        from app.models.base import Base
         from app.models.listing import Listing
         from app.models.listing_image import COVER_AI_KIND, ListingImage, SPECS_AI_KIND
         from app.services.listing_service import ListingService
@@ -272,11 +271,7 @@ class TestBulkApproveImagesRespeitaMlPictureId:
             (SPECS_AI_KIND, 91, "c91", "uploaded"),
         ]
 
-        engine = _engine_dedicado(TEST_DB)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-        sm = async_sessionmaker(engine, expire_on_commit=False)
+        engine, sm = await _preparar_banco()
         try:
             listing_id, seller_id = await _semear(sm, linhas)
 

@@ -168,7 +168,7 @@ class TestCorridaReal:
         from app.models.listing_image import ListingImage, PROMOTABLE_COVER_KINDS
         from app.services.cover_variant_service import promote_cover
 
-        engine = _engine_dedicado(TEST_DB)
+        engine = _engine_dedicado()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
@@ -198,7 +198,7 @@ class TestCorridaReal:
         from app.models.listing_image import CANDIDATE_SORT_ORDER_FLOOR, ListingImage, PROMOTABLE_SPECS_KINDS
         from app.services.specs_variant_service import promote_specs
 
-        engine = _engine_dedicado(TEST_DB)
+        engine = _engine_dedicado()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
