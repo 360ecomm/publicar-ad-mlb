@@ -37,6 +37,17 @@ class TestIsCandidate:
         assert _img(CANDIDATE_SORT_ORDER_FLOOR).is_candidate is True
 
 
+class TestReviewSecondsColumnRemoved:
+    """O tempo de revisao passou a viver so no evento
+    (`listing_review_events.review_seconds`) — a coluna homonima em
+    `listing_images` (migration c8d2f6a4e1b7) nao existe mais no model."""
+
+    def test_listing_image_nao_tem_mais_review_seconds(self):
+        from app.models.listing_image import ListingImage
+
+        assert not hasattr(ListingImage, "review_seconds")
+
+
 class TestImageOutCampos:
     def test_campos_novos_vem_da_linha(self):
         from app.schemas.listing import ImageOut

@@ -160,6 +160,14 @@ async def test_bulk_approve_images_transitions_and_dispatches():
     assert listing.status == "generating_description"
     mock_task.delay.assert_called_once_with(str(listing.id))
 
+    from app.models.listing_review_event import ListingReviewEvent
+
+    db.add.assert_called_once()
+    evento = db.add.call_args.args[0]
+    assert isinstance(evento, ListingReviewEvent)
+    assert evento.mode == "bulk"
+    assert evento.review_seconds is None
+
 
 @pytest.mark.asyncio
 async def test_bulk_generate_images_dispatches_generate_images_only():

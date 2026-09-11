@@ -13,8 +13,10 @@ indice `ix_listing_review_events_listing_id`), depois `mig.downgrade()` de
 novo (some outra vez) — prova que upgrade/downgrade sao reversiveis de
 verdade, nao so "roda sem erro".
 
-A Rev 2 (drop de `listing_images.review_seconds`) entra neste mesmo arquivo
-na Task 2 — nao aqui.
+A Rev 2 (`c8d2f6a4e1b7`, drop de `listing_images.review_seconds`) esta neste
+mesmo arquivo, em `TestRev2DropReviewSeconds`: o tempo de revisao passou a
+viver so no evento (`listing_review_events.review_seconds`, Rev 1); a coluna
+homonima em `listing_images` fica redundante e sai.
 """
 import importlib.util
 import os
@@ -28,6 +30,7 @@ _precisa_db = pytest.mark.skipif(
 )
 
 REVISION = "b3e7a1c9d5f2"
+REV2 = "c8d2f6a4e1b7"
 VERSIONS_DIR = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 COLUNAS_ESPERADAS = {
@@ -36,15 +39,15 @@ COLUNAS_ESPERADAS = {
 }
 
 
-def _carregar_migracao():
-    """Importa o modulo da revisao pelo arquivo `alembic/versions/<REVISION>_*.py`.
+def _carregar_migracao(revision):
+    """Importa o modulo da revisao pelo arquivo `alembic/versions/<revision>_*.py`.
     Antes de a revisao existir, falha aqui — e' o vermelho do TDD."""
-    candidatos = sorted(VERSIONS_DIR.glob(f"{REVISION}_*.py"))
-    assert len(candidatos) == 1, f"migracao {REVISION} nao encontrada em {VERSIONS_DIR}: {candidatos}"
-    spec = importlib.util.spec_from_file_location(f"migracao_{REVISION}", candidatos[0])
+    candidatos = sorted(VERSIONS_DIR.glob(f"{revision}_*.py"))
+    assert len(candidatos) == 1, f"migracao {revision} nao encontrada em {VERSIONS_DIR}: {candidatos}"
+    spec = importlib.util.spec_from_file_location(f"migracao_{revision}", candidatos[0])
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.revision == REVISION
+    assert mod.revision == revision
     return mod
 
 
@@ -95,7 +98,7 @@ def _indices(sync_conn, tabela):
 class TestRev1ListingReviewEvents:
     @pytest.mark.asyncio
     async def test_downgrade_dropa_e_upgrade_recria_a_tabela(self):
-        mig = _carregar_migracao()
+        mig = _carregar_migracao(REVISION)
         engine, sm = await _preparar_banco()
         try:
             # `create_all` (rodado em `_preparar_banco`) ja deixa a tabela no
@@ -125,5 +128,49 @@ class TestRev1ListingReviewEvents:
                 await conn.run_sync(_rodar_op, mig.downgrade)
                 tabelas = await conn.run_sync(_tabelas)
             assert "listing_review_events" not in tabelas, tabelas
+        finally:
+            await engine.dispose()
+
+
+def _coluna_info(sync_conn, tabela, nome):
+    """Info completa (inclusive `nullable`) de UMA coluna — `_colunas` acima
+    so devolve o conjunto de nomes, e aqui a asserção precisa de `nullable`."""
+    from sqlalchemy import inspect
+
+    for c in inspect(sync_conn).get_columns(tabela):
+        if c["name"] == nome:
+            return c
+    return None
+
+
+@_precisa_db
+class TestRev2DropReviewSeconds:
+    @pytest.mark.asyncio
+    async def test_downgrade_recria_a_coluna_e_upgrade_dropa(self):
+        """`Base.metadata.create_all` (rodado em `_preparar_banco`) constroi o
+        estado do MODEL atual — sem `review_seconds`, depois da coluna sair do
+        model nesta mesma rodada. Entao aqui o "antes" da migracao e'
+        produzido com `mig.downgrade()` (recria a coluna, nullable), e o
+        "depois" com `mig.upgrade()` (dropa de novo)."""
+        mig = _carregar_migracao(REV2)
+        engine, sm = await _preparar_banco()
+        try:
+            # Estado do model atual: sem a coluna.
+            async with engine.begin() as conn:
+                colunas = await conn.run_sync(_colunas, "listing_images")
+            assert "review_seconds" not in colunas, colunas
+
+            # Downgrade recria a coluna (nullable, SMALLINT) — simula o "antes".
+            async with engine.begin() as conn:
+                await conn.run_sync(_rodar_op, mig.downgrade)
+                info = await conn.run_sync(_coluna_info, "listing_images", "review_seconds")
+            assert info is not None, "downgrade nao recriou review_seconds"
+            assert info["nullable"] is True, info
+
+            # Upgrade dropa de novo — reversivel de verdade.
+            async with engine.begin() as conn:
+                await conn.run_sync(_rodar_op, mig.upgrade)
+                colunas = await conn.run_sync(_colunas, "listing_images")
+            assert "review_seconds" not in colunas, colunas
         finally:
             await engine.dispose()

@@ -142,10 +142,6 @@ class ListingImage(Base):
     # falhou na hora, ou em linhas antigas nao migradas.
     asset_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    # Tempo que um humano levou conferindo a versao gerada por IA contra o dado
-    # real. Instrumentacao manual, amostra de 10-15 SKUs — nao e analytics.
-    review_seconds: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
-
     @property
     def is_candidate(self) -> bool:
         """Candidata das Frentes A/B: `sort_order >= CANDIDATE_SORT_ORDER_FLOOR`.

@@ -364,8 +364,6 @@ class ListingService:
             img.sort_order = next_order
             img.status = "approved"
             approved_count += 1
-            if review_seconds is not None:
-                img.review_seconds = review_seconds
             if img.ml_picture_id:
                 approved_ml_ids.append(img.ml_picture_id)
             next_order += 1
@@ -500,7 +498,7 @@ class ListingService:
                 results.append(BulkItemResult(listing_id=lid, success=False, error=str(e)))
         return self._bulk_result(results)
 
-    async def bulk_approve_images(self, listing_ids: list, *, user_id) -> BulkResult:
+    async def bulk_approve_images(self, listing_ids: list, *, user_id: UUID) -> BulkResult:
         results: list[BulkItemResult] = []
         for lid in listing_ids:
             try:

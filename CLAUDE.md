@@ -467,7 +467,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `7b2d9f4e1c58` — drop de `listing_images.image_bytes`. **Só rodar depois de** `scripts/migrate_image_bytes_to_r2.py` e de backup da tabela
 - `8e3a5c1d7f92` — remove o write-back por seller (RF7): `seller_image_configs.write_*`, `listing_images.r2_write_status` e `url_r2`. Ver `docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md`
 - `9f4c2b7e1d63` — kind `presentation` → `presentation_ai` em `listing_images` (só dados, sem mudança de schema)
-- `b3e7a1c9d5f2` — cria `listing_review_events` (head atual)
+- `b3e7a1c9d5f2` — cria `listing_review_events`
+- `c8d2f6a4e1b7` — drop de `listing_images.review_seconds` (o tempo de revisão vive só no evento) (head atual)
 
 ---
 

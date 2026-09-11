@@ -6,9 +6,13 @@ da funcao, entao o patch precisa mirar o modulo que define o nome, nao
 `specs_variant_service`). Nao ha mais copy a patchar: os bullets vem de
 `build_specs_card`, que roda de verdade sobre os atributos do mock.
 
-Os testes de `review_seconds` chamam `ListingService.approve_images` de
-verdade (nao um mock do metodo) e leem o valor de volta direto do objeto ORM
-`ListingImage` — nao basta provar que um mock foi chamado com um numero.
+`review_seconds` nao e' mais coluna de `ListingImage` (migration
+c8d2f6a4e1b7) — o tempo de revisao vive so no `ListingReviewEvent` gravado
+por `approve_images`. Os testes de `TestApproveImagesReviewSeconds` chamam
+`ListingService.approve_images` de verdade (nao um mock do metodo) e
+verificam o `ListingReviewEvent` passado a `db.add` — nao basta provar que um
+mock generico foi chamado, o objeto tem que ser do tipo certo com os campos
+certos.
 """
 from unittest.mock import AsyncMock, MagicMock, patch
 from types import SimpleNamespace
@@ -277,9 +281,10 @@ def _make_approve_db(images):
 class TestApproveImagesReviewSeconds:
     @pytest.mark.asyncio
     async def test_review_seconds_recorded_on_approved_images_when_provided(self):
-        """Chama `ListingService.approve_images` de verdade e le
-        `review_seconds` de volta do objeto ORM — nao mocka o metodo nem
-        confere so a chamada."""
+        """Chama `ListingService.approve_images` de verdade. O tempo de
+        revisao nao mora mais na imagem — verifica o `ListingReviewEvent`
+        passado a `db.add`, nao um atributo do objeto ORM."""
+        from app.models.listing_review_event import ListingReviewEvent
         from app.services.listing_service import ListingService
 
         listing = _make_approval_listing()
@@ -296,16 +301,21 @@ class TestApproveImagesReviewSeconds:
 
         await svc.approve_images(listing, [approved_img.id], review_seconds=42, user_id=uuid4())
 
-        assert approved_img.review_seconds == 42
         assert approved_img.approved is True
-        # Imagem nao aprovada nesta chamada nao ganha o tempo de revisao.
-        assert rejected_img.review_seconds is None
         assert rejected_img.approved is False
         assert listing.status == "generating_description"
         db.commit.assert_awaited()
 
+        db.add.assert_called_once()
+        evento = db.add.call_args.args[0]
+        assert isinstance(evento, ListingReviewEvent)
+        assert evento.mode == "individual"
+        assert evento.review_seconds == 42
+        assert evento.approved_count == 1
+
     @pytest.mark.asyncio
     async def test_review_seconds_absent_stays_null_and_approval_still_works(self):
+        from app.models.listing_review_event import ListingReviewEvent
         from app.services.listing_service import ListingService
 
         listing = _make_approval_listing()
@@ -318,11 +328,20 @@ class TestApproveImagesReviewSeconds:
 
         await svc.approve_images(listing, [approved_img.id], user_id=uuid4())
 
-        assert approved_img.review_seconds is None
         assert approved_img.approved is True
         assert approved_img.status == "approved"
         assert listing.status == "generating_description"
         db.commit.assert_awaited()
+
+        db.add.assert_called_once()
+        evento = db.add.call_args.args[0]
+        assert isinstance(evento, ListingReviewEvent)
+        assert evento.review_seconds is None
+
+    def test_listing_image_nao_tem_mais_o_atributo(self):
+        """A coluna saiu do model (migration c8d2f6a4e1b7) — o tempo de
+        revisao vive so no evento acima."""
+        assert not hasattr(ListingImage, "review_seconds")
 
 
 class _DuplicateCoversResult:
