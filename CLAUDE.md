@@ -448,7 +448,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_cinco_posicoes.py` — roteamento por categoria-folha, nenhuma posição nasce aprovada, canvas do perfil, falha de uma não derruba as outras, capa determinística como fallback invisível
 - `test_allowed_values_por_tipo.py` — `values` é enumeração só em `value_type == "list"`; EAN do produto chegando ao GTIN
 - `test_ml_replace_pictures.py` — substituição TOTAL de fotos: recusa lista vazia, ID repetido e perda de `must_keep`
-- `test_bulk_approve_por_posicao.py` — Postgres real (só com `TEST_DATABASE_URL`): `bulk_approve_images` aprova as 5 posições (0–4, inclusive `cover_ai`/`specs_ai` oficiais e a `cover_deterministic` de fallback) e deixa as candidatas 90/91 `approved=False` (2)
+- `test_bulk_approve_por_posicao.py` — Postgres real (só com `TEST_DATABASE_URL`): `bulk_approve_images` aprova as 5 posições (0–4, inclusive `cover_ai`/`specs_ai` oficiais e a `cover_deterministic` de fallback) e deixa as candidatas 90/91 `approved=False`; os 2 últimos cobrem a condição do `ml_picture_id` (posição reprovada no QA não é aprovada, nem quando há fallback) (4)
 
 > Suíte completa: **455 passed, 17 skipped** sem `TEST_DATABASE_URL`; **472 passed** com ela (2026-09-11). Os pulados são os testes
 > com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, os de migração e a corrida real de
