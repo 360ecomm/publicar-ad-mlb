@@ -491,10 +491,9 @@ draft
                                                                                                                                          └─(OpenAI indisponível: crédito/401/403/5xx/timeout)──► pending_ai_engine ──(beat 15 min ou resume_ai_engine)──► generating_images
                                                                                                                                          └─(worker OK)──► pending_image_approval [manual]
                                                                                                                                                              └─(images/approve)──► generating_description
-                                                                                                                                         └─(batch: auto-aprova)──► generating_description
-                                                                                                                                                                      └─(worker OK)──► ready_to_publish [manual]
-                                                                                                                                                                      └─(batch)──► publishing
-                                                                                                                                                                                     └─(worker OK)──► published
+                                                                                                                                                                      └─(worker OK)──► ready_to_publish [manual — lote também para aqui]
+                                                                                                                                                                                  └─(pipeline/publish ou bulk/publish)──► publishing
+                                                                                                                                                                                                 └─(worker OK)──► published
 Em qualquer estado: falha ──► failed ──(retry)──► generating_title
 MLValidationError (400 do ML) ──► failed (sem retry automático)
 ```
