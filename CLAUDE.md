@@ -536,6 +536,18 @@ colidiria com o fallback no índice único do slot (`uq_listing_images_*_slot`).
 Um filtro por kind deixaria a capa e a ficha oficiais de fora e publicaria
 3 de 5 imagens.
 
+**A aprovação individual renumera; a em massa não.** `approve_images`
+reatribui `sort_order` de forma sequencial, na ordem em que os ids chegam em
+`approved_ids` (deduplicados, preservando a ordem): o `sort_order` que a
+imagem tinha antes **não** é preservado. A numeração começa em 0 quando a
+primeira aprovada tem kind de capa (`PROMOTABLE_COVER_KINDS`); se não tiver,
+começa em 1 e a posição 0 fica vaga, porque é **reservada** a capa.
+Consequência para a tela de revisão (bloco B): **a ordem em que o frontend
+envia os ids é a ordem publicada no ML** — quem montar a galeria precisa
+enviar os ids na ordem desejada. `bulk_approve_images` **não** renumera:
+mantém o `sort_order` existente. A explicação longa está no comentário do
+laço de `approve_images`, em `listing_service.py`.
+
 Canvas vem de `PositionProfile.canvas` — não de constante do worker. Cada
 posição é independente, com 2 tentativas; falha em uma não derruba as
 outras. A capa determinística é calculada mas **não vira linha visível**: só
