@@ -2,8 +2,8 @@
 
 Quando `_try_i2i_generation` nao encontra as `RAW_PHOTOS_MIN` fotos
 obrigatorias (`{sku}-1` e `{sku}-2`, em qualquer das `RAW_PHOTO_EXTENSIONS`:
-jpg, png ou webp) no bucket do seller, o listing NAO cai em nenhum fallback de geracao: entra em
-`pending_raw_photos` e espera. Antes existia um caminho texto-imagem (prompt
+jpg, png ou webp) no bucket do seller, o listing NAO cai em nenhum fallback
+de geracao: entra em `pending_raw_photos` e espera. Antes existia um caminho texto-imagem (prompt
 do LLM + motor gerando do zero) que em lote auto-aprovava e publicava um
 anuncio com imagem inventada — removido em 2026-09-10.
 
