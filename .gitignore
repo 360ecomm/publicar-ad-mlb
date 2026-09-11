@@ -17,6 +17,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+# `lib/` acima e' artefato de build Python; `frontend/src/lib/` e' codigo.
+!frontend/src/lib/
 lib64/
 parts/
 sdist/
