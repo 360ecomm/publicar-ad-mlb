@@ -453,8 +453,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_ml_replace_pictures.py` — substituição TOTAL de fotos: recusa lista vazia, ID repetido e perda de `must_keep`
 - `test_bulk_approve_por_posicao.py` — Postgres real (só com `TEST_DATABASE_URL`): `bulk_approve_images` aprova as 5 posições (0–4, inclusive `cover_ai`/`specs_ai` oficiais e a `cover_deterministic` de fallback) e deixa as candidatas 90/91 `approved=False`; os 2 últimos cobrem a condição do `ml_picture_id` (posição reprovada no QA não é aprovada, nem quando há fallback) (4)
 
-> Suíte completa: **455 passed, 17 skipped** sem `TEST_DATABASE_URL`; **472 passed** com ela (2026-09-11). Os pulados são os testes
-> com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, os de migração e a corrida real de
+> Suíte completa: **455 passed, 21 skipped** sem `TEST_DATABASE_URL`; **476 passed** com ela (2026-09-11). Os pulados são os testes
+> com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, os de migração e a corrida real de
 > `test_promocao_indice_unico.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
 > `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
