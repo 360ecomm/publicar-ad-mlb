@@ -14,7 +14,7 @@ Agora: `_tentar` continua tolerando falha generica por posicao, mas quando a
 ultima tentativa falha com `ImageEngineUnavailableError` a excecao SOBE e
 aborta a geracao inteira; o worker descarta as posicoes parciais desta
 tentativa (rollback), poe o listing em `pending_ai_engine` com a mensagem
-real do motor, e a chain de lote morre nos guards. Retomada: beat a cada 15
+real do motor, e nada e' enfileirado depois do standby. Retomada: beat a cada 15
 min (credito pode voltar a qualquer momento, sem aviso) ou endpoint manual —
 sem pre-checagem, porque a API da OpenAI nao expoe saldo: tentar E' a
 checagem.

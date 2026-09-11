@@ -91,7 +91,7 @@ def _db_com_config(base_url="https://bucket.r2.dev", rowcount=1):
 
 class TestRetomada:
     @pytest.mark.asyncio
-    async def test_fotos_disponiveis_retoma_lote_pela_chain(self):
+    async def test_fotos_disponiveis_retoma_lote_por_dispatch_image_generation(self):
         from app.services.raw_photo_standby_service import try_resume_raw_photos
 
         listing = _listing(created_via="batch")

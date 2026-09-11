@@ -11,10 +11,10 @@ async def _mock_session(mock_db):
 class TestGenerateDescriptionIdempotency:
     @pytest.mark.asyncio
     async def test_skips_when_status_not_generating_description(self):
-        """Guard defends against a Celery chain proceeding past a pause
-        (e.g. pending_raw_photos) set by the previous link
-        without raising — the chain still advances since the task returned
-        normally, so this step must no-op instead of overwriting the pause."""
+        """Guard de idempotência: retry do Celery ou despacho duplicado de
+        generate_description.delay pode reinvocar a task depois que o listing
+        já saiu de 'generating_description' (ex.: parado em pending_raw_photos)
+        — este passo tem que virar no-op em vez de sobrescrever o estado real."""
         from app.workers.tasks.ai_tasks import _generate_description_async
 
         mock_listing = MagicMock()

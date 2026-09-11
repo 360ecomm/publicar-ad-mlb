@@ -415,9 +415,9 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 
 ### backend/app/workers/tasks/
 - `ai_tasks.py` — `generate_title`, `generate_description`
-- `category_tasks.py` — `predict_category` (batch: atomic UPDATE + Celery chain se sem attrs pendentes)
+- `category_tasks.py` — `predict_category` (batch: UPDATE atômico `pending_description → generating_images` + só `generate_images.delay`, se sem attrs pendentes)
 - `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; sem foto bruta no bucket → `pending_raw_photos`, nunca fallback; `ensure_dimensions` antes do upload)
-- `raw_photo_tasks.py` — `check_pending_raw_photos` (beat, 15 min): retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + mesma chain do lote)
+- `raw_photo_tasks.py` — `check_pending_raw_photos` (beat, 15 min): retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + reentrada por `dispatch_image_generation`, que é só `generate_images.delay`)
 - `ai_engine_tasks.py` — `check_pending_ai_engine` (beat, 15 min): redispara listings em `pending_ai_engine` (motor OpenAI fora: crédito, 401/403, 5xx, timeout). Sem pré-checagem, a OpenAI não expõe saldo: tentar é a checagem. `_tentar` deixa `ImageEngineUnavailableError` subir na última tentativa e o worker aborta a geração inteira (rollback das posições parciais) em vez de seguir com galeria parcial ou cair em `failed` 
 - `publish_tasks.py` — `publish_listing` (MLValidationError → failed sem retry)
 - `batch_tasks.py` — `process_batch` (lê planilha, cria listings, dispara pipeline)
@@ -519,9 +519,10 @@ outras. A capa determinística é calculada mas **não vira linha visível**: s�
 é persistida se a posição 0 por IA falhar por completo.
 
 **Todas nascem `approved=False`, em qualquer categoria, também em lote.** O
-listing para em `pending_image_approval` e a chain de lote morre nos guards
-das tasks seguintes. Não existe mais nenhum caminho que publique sem revisão
-humana das imagens.
+listing para em `pending_image_approval` e nada é enfileirado depois da
+geração: a descrição só nasce da aprovação humana (`images/approve` ou
+`bulk/approve`), e a publicação só de `pipeline/publish` ou `bulk/publish`.
+Não existe mais nenhum caminho que publique sem revisão humana das imagens.
 
 > **Vertical seria destrutivo aqui.** `normalize_to_square` **recorta o
 > centro**, não adiciona borda: um canvas 3:4 perderia o painel de texto das

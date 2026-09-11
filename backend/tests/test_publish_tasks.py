@@ -11,10 +11,10 @@ async def _mock_session(mock_db):
 class TestPublishListingIdempotency:
     @pytest.mark.asyncio
     async def test_skips_when_status_not_publishing(self):
-        """Guard defends against a Celery chain proceeding past a pause set
-        by an earlier link (e.g. pending_raw_photos) without
-        raising — this step must no-op instead of publishing an incomplete
-        listing (e.g. zero images)."""
+        """Guard de idempotência: retry do Celery ou despacho duplicado de
+        publish_listing pode reinvocar a task depois que o listing já saiu de
+        'publishing' — este passo tem que virar no-op em vez de publicar um
+        listing em estado errado (ex.: sem imagens aprovadas)."""
         from app.workers.tasks.publish_tasks import _publish_listing_async
 
         mock_listing = MagicMock()
