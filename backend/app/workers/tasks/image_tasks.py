@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 
 from app.workers.celery_app import celery_app
 
@@ -38,26 +39,17 @@ async def _resolve_requires_white_bg(listing) -> bool:
     return await category_requires_white_background(listing.ml_category_id)
 
 
-async def _try_i2i_generation(db, listing, seller, access_token: str) -> int | None:
-    """Gera as imagens a partir das fotos brutas reais do seller.
+async def _carregar_fotos_brutas(db, listing) -> tuple[list[bytes], str] | None:
+    """`(fotos, sku)` do unico SKU do anuncio, lidas do bucket do seller agora.
 
-    Devolve None se o seller nao tiver SellerImageConfig ou faltar foto bruta
-    obrigatoria — o chamador poe o listing em `pending_raw_photos`. Do
-    contrario, roteia para o esquema de 5 posicoes com o perfil da categoria
-    (`profile_for_category` nunca devolve None: categoria sem perfil proprio
-    usa `PERFIL_PADRAO`).
-
-    Aqui existiu, ate 2026-09-10, um segundo caminho — individuais por foto
-    (2 variantes cada), capa composta para kit, capa deterministica
-    persistida e 3 cards Pillow — que era o destino de toda categoria sem
-    perfil e que em LOTE auto-aprovava e publicava. Removido por completo, nao
-    deixado dormente. O ramo de kit (`len(skus) > 1`) foi junto: era
-    inalcancavel, `resolve_listing_skus` sempre devolve 1 SKU.
+    None quando o seller nao tem `SellerImageConfig`, o anuncio nao resolve
+    SKU, ou faltam as fotos minimas — o chamador decide o standby. Extraido
+    de `_try_i2i_generation` para a regeneracao de UMA posicao reler as fotos
+    do mesmo jeito (foto trocada pelo seller entra na regeneracao).
     """
     from sqlalchemy import select
 
     from app.models.seller_image_config import SellerImageConfig
-    from app.services.image_position_profiles import profile_for_category
     from app.services.seller_image_source_service import (
         fetch_all_raw_photos,
         resolve_listing_skus,
@@ -83,15 +75,38 @@ async def _try_i2i_generation(db, listing, seller, access_token: str) -> int | N
         raise RuntimeError(
             f"anuncio com {len(skus)} SKUs nao e suportado pelo esquema de 5 posicoes"
         )
+    return raw_photos_by_sku[skus[0]], skus[0]
+
+
+async def _try_i2i_generation(db, listing, seller, access_token: str) -> int | None:
+    """Gera as imagens a partir das fotos brutas reais do seller.
+
+    Devolve None se o seller nao tiver SellerImageConfig ou faltar foto bruta
+    obrigatoria — o chamador poe o listing em `pending_raw_photos`. Do
+    contrario, roteia para o esquema de 5 posicoes com o perfil da categoria
+    (`profile_for_category` nunca devolve None: categoria sem perfil proprio
+    usa `PERFIL_PADRAO`).
+
+    Aqui existiu, ate 2026-09-10, um segundo caminho — individuais por foto
+    (2 variantes cada), capa composta para kit, capa deterministica
+    persistida e 3 cards Pillow — que era o destino de toda categoria sem
+    perfil e que em LOTE auto-aprovava e publicava. Removido por completo, nao
+    deixado dormente. O ramo de kit (`len(skus) > 1`) foi junto: era
+    inalcancavel, `resolve_listing_skus` sempre devolve 1 SKU.
+    """
+    from app.services.image_position_profiles import profile_for_category
+
+    carregado = await _carregar_fotos_brutas(db, listing)
+    if carregado is None:
+        return None
+    fotos, sku = carregado
 
     profile = profile_for_category(listing.ml_category_id)
     logger.info(
         "roteamento listing_id=%s categoria=%s perfil=%s caminho=cinco_posicoes",
         listing.id, listing.ml_category_id, profile.nome,
     )
-    return await _gerar_cinco_posicoes(
-        db, listing, access_token, profile, raw_photos_by_sku[skus[0]], skus[0]
-    )
+    return await _gerar_cinco_posicoes(db, listing, access_token, profile, fotos, sku)
 
 
 async def _generate_images_async(listing_id: str) -> dict:
@@ -279,7 +294,7 @@ async def _tentar(descricao: str, listing_id, fabrica, tentativas: int = _TENTAT
     return None
 
 
-async def _campos_das_posicoes(db, listing):
+async def _campos_das_posicoes(db, listing, com_copy: bool = True):
     """Textos das posicoes 2, 3 e 5, todos de fontes ja existentes.
 
     Posicao 2 espelha a hierarquia do ROTULO FISICO: nome do produto em
@@ -300,7 +315,9 @@ async def _campos_das_posicoes(db, listing):
         (a.value_name for a in atributos if a.attribute_id == "UNIT_VOLUME" and a.value_name),
         None,
     )
-    cards = await generate_card_copy(listing, atributos)
+    # `com_copy=False` (regeneracao de posicao != 2): nao paga a chamada ao
+    # LLM; `beneficios` sai None e a posicao 2 e' pulada.
+    cards = await generate_card_copy(listing, atributos) if com_copy else []
     beneficios = next((c for c in cards if c.kind == "card_benefits"), None)
     ficha = build_specs_card(atributos)
 
@@ -315,15 +332,28 @@ async def _campos_das_posicoes(db, listing):
     }
 
 
+def _persistir_linha(db, listing, *, alvo, **valores) -> None:
+    """Linha nova (`alvo=None`, geracao completa — `db.add` identico ao de
+    sempre) ou preenche o placeholder `generating` da regeneracao no lugar,
+    para o id que a tela ja recebeu continuar valendo."""
+    from app.models.listing_image import ListingImage
+
+    if alvo is None:
+        db.add(ListingImage(listing_id=listing.id, **valores))
+        return
+    alvo.validation_error = None
+    for campo, valor in valores.items():
+        setattr(alvo, campo, valor)
+
+
 async def _salvar_posicao(db, listing, sku, kind, sort_order, gerado, access_token,
-                          requires_white_bg: bool):
+                          requires_white_bg: bool, alvo=None):
     """QA + upload + linha nao aprovada. Devolve True se subiu.
 
     `approved=False` SEMPRE: revisao humana antes de publicar e obrigatoria em
     todas as 5 posicoes, sem excecao. Reprovada no QA, guarda os bytes do que
     a IA produziu — um candidato existe para alguem julgar.
     """
-    from app.models.listing_image import ListingImage
     from app.services.image_service import MLPictureService
     from app.services.r2_asset_service import store_candidate_bytes
 
@@ -336,11 +366,11 @@ async def _salvar_posicao(db, listing, sku, kind, sort_order, gerado, access_tok
         asset_key = await store_candidate_bytes(
             gerado, db=db, seller_id=listing.seller_id, sku=sku, kind=kind
         )
-        db.add(ListingImage(
-            listing_id=listing.id, status="validation_failed",
-            validation_error=veredito.reason, approved=False,
+        _persistir_linha(
+            db, listing, alvo=alvo,
+            status="validation_failed", validation_error=veredito.reason, approved=False,
             sort_order=sort_order, kind=kind, source_sku=sku, asset_key=asset_key,
-        ))
+        )
         logger.warning(
             "posicao_reprovada listing_id=%s kind=%s reason=%s",
             listing.id, kind, veredito.reason,
@@ -353,12 +383,206 @@ async def _salvar_posicao(db, listing, sku, kind, sort_order, gerado, access_tok
     asset_key = await store_candidate_bytes(
         preparado, db=db, seller_id=listing.seller_id, sku=sku, kind=kind
     )
-    db.add(ListingImage(
-        listing_id=listing.id, ml_picture_id=ml_picture_id, status="uploaded",
+    _persistir_linha(
+        db, listing, alvo=alvo,
+        ml_picture_id=ml_picture_id, status="uploaded",
         approved=False, sort_order=sort_order, kind=kind, source_sku=sku,
         asset_key=asset_key,
-    ))
+    )
     return True
+
+
+@dataclass
+class _ContextoGeracao:
+    """Tudo que as 5 posicoes compartilham, montado UMA vez por geracao.
+
+    A regeneracao de UMA posicao monta o mesmo contexto e chama
+    `_gerar_posicao` uma vez — e' o que garante que a posicao regenerada sai
+    do mesmo prompt, mesma base e mesmo canvas da geracao completa.
+    """
+    engine: object
+    canvas: str
+    profile: object
+    fotos: list
+    sku: str
+    access_token: str
+    campos: dict | None   # None = nao calculado (regeneracao de 0 ou 3)
+    base: bytes | None    # capa deterministica preparada (QA ok) ou None
+    base_ia: bytes        # `base`, ou a 1a foto bruta se nao houver capa
+
+
+async def _montar_contexto(db, listing, access_token, profile, fotos, sku, *,
+                           com_campos: bool = True, com_copy: bool = True) -> _ContextoGeracao:
+    """Motor, canvas, campos e capa deterministica — na mesma ordem de antes.
+
+    `com_campos=False` pula a consulta de atributos e a copy (posicoes 0 e 3
+    nao usam nada disso); `com_copy=False` consulta atributos mas nao paga o
+    LLM (posicoes 1 e 4). A geracao completa usa os dois padroes.
+
+    Imports em nivel de funcao de proposito: os testes fazem patch no
+    atributo do modulo de origem.
+    """
+    from app.services.image_deterministic_service import try_deterministic_cover
+    from app.services.image_engines.openai_edit_engine import OpenAIEditEngine
+
+    engine = OpenAIEditEngine()
+    canvas = profile.canvas
+    campos = await _campos_das_posicoes(db, listing, com_copy=com_copy) if com_campos else None
+
+    # Base deterministica: recorte do pixel original, sem IA — o rotulo nela e
+    # sempre fiel, e e por isso que as posicoes 1 e 5 partem dela.
+    cover_bytes = try_deterministic_cover(fotos[0])
+    base, _ = (
+        _prepare_image_for_upload(cover_bytes, requires_white_bg=True)
+        if cover_bytes is not None else (None, None)
+    )
+    logger.info(
+        "cinco_posicoes listing_id=%s sku=%s capa_deterministica=%s",
+        listing.id, sku, "hit" if base is not None else "miss",
+    )
+    return _ContextoGeracao(
+        engine=engine, canvas=canvas, profile=profile, fotos=fotos, sku=sku,
+        access_token=access_token, campos=campos, base=base,
+        base_ia=base if base is not None else fotos[0],
+    )
+
+
+async def _gerar_posicao(db, listing, ctx: _ContextoGeracao, numero: int, alvo=None) -> bool:
+    """Gera UMA posicao (0..4) do esquema. Devolve True se subiu ao ML.
+
+    O corpo de cada posicao e' o que estava embutido em `_gerar_cinco_posicoes`,
+    inclusive o fallback da capa deterministica na 0 e as condicoes de pulo
+    (sem nome -> 1, sem copy -> 2, sem ficha -> 4). `alvo` e' o placeholder
+    `generating` da regeneracao: preenchido no lugar, em vez de `db.add`.
+    Sem `alvo`, comportamento identico ao anterior.
+    """
+    from app.models.listing_image import (
+        COVER_DETERMINISTIC_KIND,
+        GENERATING_STATUS,
+        POSITION_KINDS,
+    )
+    from app.services.cover_variant_service import _pick_prompt
+    from app.services.image_position_profiles import detail_caption_for
+    from app.services.image_position_prompts import (
+        build_benefits_prompt,
+        build_detail_prompt,
+        build_presentation_prompt,
+    )
+    from app.services.seller_image_source_service import pick_detail_source
+    from app.services.specs_variant_service import _build_specs_prompt
+
+    if numero not in POSITION_KINDS:
+        raise ValueError(f"posicao {numero!r} fora do esquema de 5 posicoes (0..4)")
+
+    engine, canvas, fotos, sku = ctx.engine, ctx.canvas, ctx.fotos, ctx.sku
+    access_token = ctx.access_token
+    campos = ctx.campos or {}
+
+    if numero == 0:
+        # Posicao 1 — capa por IA, sempre branca (ver `_pick_prompt`).
+        async def _pos1():
+            return (await engine.edit(images=[ctx.base_ia], prompt=_pick_prompt(), n=1, size=canvas))[0]
+
+        gerado = await _tentar("1-capa", listing.id, _pos1)
+        if gerado is not None and await _salvar_posicao(
+            db, listing, sku, "cover_ai", 0, gerado, access_token, requires_white_bg=True, alvo=alvo
+        ):
+            return True
+        if ctx.base is None:
+            return False
+        # Fallback interno: a capa deterministica so aparece quando a IA falha.
+        from app.services.image_service import MLPictureService
+        from app.services.r2_asset_service import store_candidate_bytes
+
+        ml_picture_id = await MLPictureService().upload(ctx.base, access_token)
+        asset_key = await store_candidate_bytes(
+            ctx.base, db=db, seller_id=listing.seller_id, sku=sku, kind=COVER_DETERMINISTIC_KIND
+        )
+        # Se a IA produziu e o QA reprovou, o placeholder ja virou a linha
+        # `validation_failed` (evidencia); o fallback vai numa linha nova,
+        # como no caminho completo. Se a IA nem produziu, o placeholder
+        # ainda esta `generating` e o fallback o preenche.
+        destino = alvo if (alvo is not None and alvo.status == GENERATING_STATUS) else None
+        _persistir_linha(
+            db, listing, alvo=destino,
+            ml_picture_id=ml_picture_id, status="uploaded",
+            approved=False, sort_order=0, kind=COVER_DETERMINISTIC_KIND,
+            source_sku=sku, asset_key=asset_key,
+        )
+        logger.warning("cinco_posicoes listing_id=%s posicao=1 usou_fallback_deterministico", listing.id)
+        return True
+
+    if numero == 1:
+        # Posicao 2 — apresentacao. Unica que recebe TODAS as fotos brutas.
+        if not campos.get("nome"):
+            return False
+        prompt2 = build_presentation_prompt(campos["nome"], campos["marca"], campos["volume"])
+
+        async def _pos2():
+            return (await engine.edit(images=fotos, prompt=prompt2, n=1, size=canvas))[0]
+
+        gerado = await _tentar("2-apresentacao", listing.id, _pos2)
+        if gerado is None:
+            return False
+        return await _salvar_posicao(
+            db, listing, sku, POSITION_KIND_PRESENTATION, 1, gerado, access_token,
+            requires_white_bg=False, alvo=alvo,
+        )
+
+    if numero == 2:
+        # Posicao 3 — beneficios. Copy do LLM, a mesma ja usada no card Pillow.
+        beneficios = campos.get("beneficios")
+        if beneficios is None:
+            return False
+        prompt3 = build_benefits_prompt(beneficios.title, beneficios.bullets)
+
+        async def _pos3():
+            return (await engine.edit(images=[fotos[0]], prompt=prompt3, n=1, size=canvas))[0]
+
+        gerado = await _tentar("3-beneficios", listing.id, _pos3)
+        if gerado is None:
+            return False
+        return await _salvar_posicao(
+            db, listing, sku, POSITION_KIND_BENEFITS, 2, gerado, access_token,
+            requires_white_bg=False, alvo=alvo,
+        )
+
+    if numero == 3:
+        # Posicao 4 — detalhe. `pick_detail_source` escolhe a 3a foto se existir.
+        foto_detalhe, veio_de_extra = pick_detail_source(fotos)
+        legenda = detail_caption_for(ctx.profile, sku)
+        prompt4 = build_detail_prompt(legenda)
+        logger.info(
+            "cinco_posicoes listing_id=%s posicao=4 fonte=%s legenda=%r",
+            listing.id, "extra" if veio_de_extra else "reuso_do_minimo", legenda,
+        )
+
+        async def _pos4():
+            return (await engine.edit(images=[foto_detalhe], prompt=prompt4, n=1, size=canvas))[0]
+
+        gerado = await _tentar("4-detalhe", listing.id, _pos4)
+        if gerado is None:
+            return False
+        return await _salvar_posicao(
+            db, listing, sku, POSITION_KIND_DETAIL, 3, gerado, access_token,
+            requires_white_bg=False, alvo=alvo,
+        )
+
+    # numero == 4 — Posicao 5 — ficha tecnica. Bullets ancorados no value_name real.
+    ficha = campos.get("ficha")
+    if ficha is None:
+        return False
+    prompt5 = _build_specs_prompt(ficha.bullets)
+
+    async def _pos5():
+        return (await engine.edit(images=[ctx.base_ia], prompt=prompt5, n=1, size=canvas))[0]
+
+    gerado = await _tentar("5-ficha", listing.id, _pos5)
+    if gerado is None:
+        return False
+    return await _salvar_posicao(
+        db, listing, sku, "specs_ai", 4, gerado, access_token, requires_white_bg=False, alvo=alvo
+    )
 
 
 async def _gerar_cinco_posicoes(db, listing, access_token, profile, fotos, sku) -> int:
@@ -375,123 +599,10 @@ async def _gerar_cinco_posicoes(db, listing, access_token, profile, fotos, sku) 
     falhar por completo — ai ela assume a capa como fallback, em vez de o
     anuncio ficar sem imagem nenhuma na posicao mais importante.
     """
-    from app.services.cover_variant_service import _pick_prompt
-    from app.services.image_deterministic_service import try_deterministic_cover
-    from app.services.image_engines.openai_edit_engine import OpenAIEditEngine
-    from app.services.image_position_prompts import (
-        build_benefits_prompt,
-        build_detail_prompt,
-        build_presentation_prompt,
-    )
-    from app.services.image_position_profiles import detail_caption_for
-    from app.services.seller_image_source_service import pick_detail_source
-    from app.services.specs_variant_service import _build_specs_prompt
-
-    engine = OpenAIEditEngine()
-    canvas = profile.canvas
-    campos = await _campos_das_posicoes(db, listing)
+    ctx = await _montar_contexto(db, listing, access_token, profile, fotos, sku)
     salvas = 0
-
-    # Base deterministica: recorte do pixel original, sem IA — o rotulo nela e
-    # sempre fiel, e e por isso que as posicoes 1 e 5 partem dela.
-    cover_bytes = try_deterministic_cover(fotos[0])
-    base, _ = (
-        _prepare_image_for_upload(cover_bytes, requires_white_bg=True)
-        if cover_bytes is not None else (None, None)
-    )
-    logger.info(
-        "cinco_posicoes listing_id=%s sku=%s capa_deterministica=%s",
-        listing.id, sku, "hit" if base is not None else "miss",
-    )
-    base_ia = base if base is not None else fotos[0]
-
-    # Posicao 1 — capa por IA, sempre branca (ver `_pick_prompt`).
-    async def _pos1():
-        return (await engine.edit(images=[base_ia], prompt=_pick_prompt(), n=1, size=canvas))[0]
-
-    gerado = await _tentar("1-capa", listing.id, _pos1)
-    if gerado is not None and await _salvar_posicao(
-        db, listing, sku, "cover_ai", 0, gerado, access_token, requires_white_bg=True
-    ):
-        salvas += 1
-    elif base is not None:
-        # Fallback interno: a capa deterministica so aparece quando a IA falha.
-        from app.models.listing_image import ListingImage
-        from app.services.image_service import MLPictureService
-        from app.services.r2_asset_service import store_candidate_bytes
-
-        ml_picture_id = await MLPictureService().upload(base, access_token)
-        asset_key = await store_candidate_bytes(
-            base, db=db, seller_id=listing.seller_id, sku=sku, kind="cover_deterministic"
-        )
-        db.add(ListingImage(
-            listing_id=listing.id, ml_picture_id=ml_picture_id, status="uploaded",
-            approved=False, sort_order=0, kind="cover_deterministic",
-            source_sku=sku, asset_key=asset_key,
-        ))
-        salvas += 1
-        logger.warning("cinco_posicoes listing_id=%s posicao=1 usou_fallback_deterministico", listing.id)
-
-    # Posicao 2 — apresentacao. Unica que recebe TODAS as fotos brutas.
-    if campos["nome"]:
-        prompt2 = build_presentation_prompt(campos["nome"], campos["marca"], campos["volume"])
-
-        async def _pos2():
-            return (await engine.edit(images=fotos, prompt=prompt2, n=1, size=canvas))[0]
-
-        gerado = await _tentar("2-apresentacao", listing.id, _pos2)
-        if gerado is not None and await _salvar_posicao(
-            db, listing, sku, POSITION_KIND_PRESENTATION, 1, gerado, access_token,
-            requires_white_bg=False,
-        ):
-            salvas += 1
-
-    # Posicao 3 — beneficios. Copy do LLM, a mesma ja usada no card Pillow.
-    beneficios = campos["beneficios"]
-    if beneficios is not None:
-        prompt3 = build_benefits_prompt(beneficios.title, beneficios.bullets)
-
-        async def _pos3():
-            return (await engine.edit(images=[fotos[0]], prompt=prompt3, n=1, size=canvas))[0]
-
-        gerado = await _tentar("3-beneficios", listing.id, _pos3)
-        if gerado is not None and await _salvar_posicao(
-            db, listing, sku, POSITION_KIND_BENEFITS, 2, gerado, access_token,
-            requires_white_bg=False,
-        ):
-            salvas += 1
-
-    # Posicao 4 — detalhe. `pick_detail_source` escolhe a 3a foto se existir.
-    foto_detalhe, veio_de_extra = pick_detail_source(fotos)
-    legenda = detail_caption_for(profile, sku)
-    prompt4 = build_detail_prompt(legenda)
-    logger.info(
-        "cinco_posicoes listing_id=%s posicao=4 fonte=%s legenda=%r",
-        listing.id, "extra" if veio_de_extra else "reuso_do_minimo", legenda,
-    )
-
-    async def _pos4():
-        return (await engine.edit(images=[foto_detalhe], prompt=prompt4, n=1, size=canvas))[0]
-
-    gerado = await _tentar("4-detalhe", listing.id, _pos4)
-    if gerado is not None and await _salvar_posicao(
-        db, listing, sku, POSITION_KIND_DETAIL, 3, gerado, access_token,
-        requires_white_bg=False,
-    ):
-        salvas += 1
-
-    # Posicao 5 — ficha tecnica. Bullets ancorados no value_name real.
-    ficha = campos["ficha"]
-    if ficha is not None:
-        prompt5 = _build_specs_prompt(ficha.bullets)
-
-        async def _pos5():
-            return (await engine.edit(images=[base_ia], prompt=prompt5, n=1, size=canvas))[0]
-
-        gerado = await _tentar("5-ficha", listing.id, _pos5)
-        if gerado is not None and await _salvar_posicao(
-            db, listing, sku, "specs_ai", 4, gerado, access_token, requires_white_bg=False
-        ):
+    for numero in range(5):
+        if await _gerar_posicao(db, listing, ctx, numero):
             salvas += 1
 
     await db.commit()

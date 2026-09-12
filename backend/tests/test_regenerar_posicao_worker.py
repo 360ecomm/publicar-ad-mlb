@@ -1,0 +1,206 @@
+"""Regeneracao de UMA posicao — lado do worker.
+
+Parte 1 (esta task): `_gerar_posicao` isolada, extraida de
+`_gerar_cinco_posicoes` sem mudar o caminho completo (a prova disso sao os
+testes existentes de imagem, intocados). Com `alvo`, preenche o placeholder
+em vez de abrir linha nova.
+
+Parte 2 (Task 4): orquestracao de `_regenerate_position_async`.
+
+Reusa o ambiente de mocks de `test_cinco_posicoes.py`.
+"""
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
+
+import pytest
+
+from tests.test_cinco_posicoes import (
+    _Ambiente,
+    _atributos_sku38,
+    _db_com_atributos,
+    _fotos,
+    _listing,
+    _salvos,
+)
+
+
+def _placeholder(sort_order: int, kind: str):
+    from app.models.listing_image import ListingImage
+    return ListingImage(
+        id=uuid4(), listing_id=uuid4(), status="generating", approved=False,
+        sort_order=sort_order, kind=kind,
+    )
+
+
+async def _contexto(db, **kw):
+    from app.services.image_position_profiles import PERFIL_PERFUMARIA
+    from app.workers.tasks.image_tasks import _montar_contexto
+    return await _montar_contexto(db, _listing(), "tok", PERFIL_PERFUMARIA, _fotos(), "38", **kw)
+
+
+class TestGerarPosicaoIsolada:
+    @pytest.mark.asyncio
+    async def test_posicao_2_sozinha_faz_uma_chamada_e_grava_uma_linha(self):
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente() as amb:
+            ctx = await _contexto(db)
+            ok = await _gerar_posicao(db, _listing(), ctx, 2)
+
+        assert ok is True
+        assert len(amb.prompts) == 1
+        (img,) = _salvos(db)
+        assert (img.kind, img.sort_order, img.approved) == ("benefits_ai", 2, False)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("numero,kind", [(0, "cover_ai"), (1, "presentation_ai"), (3, "detail_ai"), (4, "specs_ai")])
+    async def test_cada_posicao_grava_o_kind_da_sua_posicao(self, numero, kind):
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente() as amb:
+            ctx = await _contexto(db)
+            assert await _gerar_posicao(db, _listing(), ctx, numero) is True
+
+        assert len(amb.prompts) == 1
+        (img,) = _salvos(db)
+        assert (img.kind, img.sort_order) == (kind, numero)
+
+    @pytest.mark.asyncio
+    async def test_sem_copy_nao_chama_o_llm(self):
+        """Regenerar 0, 1, 3 ou 4 nao pode pagar a copy dos cards."""
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente(), patch(
+            "app.services.image_card_copy_service.generate_card_copy",
+            new_callable=AsyncMock, return_value=[],
+        ) as copy:
+            ctx = await _contexto(db, com_campos=True, com_copy=False)
+        copy.assert_not_awaited()
+        assert ctx.campos is not None and ctx.campos["beneficios"] is None
+        assert ctx.campos["nome"] == "Fatal Black For Her"
+
+    @pytest.mark.asyncio
+    async def test_com_copy_chama_o_llm_uma_vez(self):
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente(), patch(
+            "app.services.image_card_copy_service.generate_card_copy",
+            new_callable=AsyncMock, return_value=[],
+        ) as copy:
+            await _contexto(db, com_campos=True, com_copy=True)
+        copy.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_sem_campos_nao_consulta_atributos(self):
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente():
+            ctx = await _contexto(db, com_campos=False)
+        assert ctx.campos is None
+        db.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_alvo_e_preenchido_em_vez_de_nova_linha(self):
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        alvo = _placeholder(3, "detail_ai")
+        with _Ambiente():
+            ctx = await _contexto(db, com_campos=False)
+            ok = await _gerar_posicao(db, _listing(), ctx, 3, alvo=alvo)
+
+        assert ok is True
+        db.add.assert_not_called()
+        assert alvo.status == "uploaded"
+        assert alvo.ml_picture_id.startswith("pic-")
+        assert alvo.asset_key == "asset-key-teste"
+        assert (alvo.kind, alvo.sort_order, alvo.approved) == ("detail_ai", 3, False)
+        assert alvo.validation_error is None
+
+    @pytest.mark.asyncio
+    async def test_alvo_reprovado_no_qa_guarda_evidencia(self):
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        alvo = _placeholder(3, "detail_ai")
+        with _Ambiente(qa_reprova=True):
+            ctx = await _contexto(db, com_campos=False)
+            ok = await _gerar_posicao(db, _listing(), ctx, 3, alvo=alvo)
+
+        assert ok is False
+        db.add.assert_not_called()
+        assert alvo.status == "validation_failed"
+        assert alvo.ml_picture_id is None
+        assert alvo.asset_key == "asset-key-teste", "bytes crus vao ao R2 mesmo reprovados"
+        assert alvo.validation_error
+
+    @pytest.mark.asyncio
+    async def test_posicao_0_com_ia_falhando_cai_no_fallback_dentro_do_alvo(self):
+        """As 2 tentativas da IA falham (indices 0 e 1) -> capa deterministica
+        preenche o PROPRIO placeholder, kind cover_deterministic."""
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        alvo = _placeholder(0, "cover_ai")
+        with _Ambiente(falhar_em={0, 1}) as amb:
+            ctx = await _contexto(db, com_campos=False)
+            ok = await _gerar_posicao(db, _listing(), ctx, 0, alvo=alvo)
+
+        assert ok is True
+        assert len(amb.prompts) == 2
+        db.add.assert_not_called()
+        assert (alvo.kind, alvo.status, alvo.sort_order) == ("cover_deterministic", "uploaded", 0)
+        assert alvo.ml_picture_id and alvo.approved is False
+
+    @pytest.mark.asyncio
+    async def test_posicao_0_com_ia_falhando_sem_alvo_grava_linha_nova(self):
+        """Mesmo fallback do caminho completo, sem alvo: linha nova."""
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente(falhar_em={0, 1}):
+            ctx = await _contexto(db, com_campos=False)
+            assert await _gerar_posicao(db, _listing(), ctx, 0) is True
+        (img,) = _salvos(db)
+        assert (img.kind, img.sort_order) == ("cover_deterministic", 0)
+
+    @pytest.mark.asyncio
+    async def test_posicao_2_sem_copy_devolve_false_sem_chamar_o_motor(self):
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente() as amb:
+            ctx = await _contexto(db, com_campos=True, com_copy=False)
+            assert await _gerar_posicao(db, _listing(), ctx, 2) is False
+        assert amb.prompts == []
+        db.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_posicao_fora_de_0_a_4_levanta(self):
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        with _Ambiente():
+            ctx = await _contexto(db, com_campos=False)
+            with pytest.raises(ValueError):
+                await _gerar_posicao(db, _listing(), ctx, 5)
+
+
+class TestCarregarFotosBrutas:
+    @pytest.mark.asyncio
+    async def test_sem_config_devolve_none(self):
+        from app.workers.tasks.image_tasks import _carregar_fotos_brutas
+
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+        assert await _carregar_fotos_brutas(db, _listing()) is None
+
+    @pytest.mark.asyncio
+    async def test_devolve_fotos_e_sku(self):
+        from app.workers.tasks.image_tasks import _carregar_fotos_brutas
+
+        cfg = MagicMock(); cfg.raw_base_url = "https://b/x"
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=cfg)))
+        with patch("app.services.seller_image_source_service.fetch_all_raw_photos",
+                   new_callable=AsyncMock, return_value={"38": [b"1", b"2"]}):
+            assert await _carregar_fotos_brutas(db, _listing()) == ([b"1", b"2"], "38")
