@@ -114,6 +114,14 @@ class TestTodosOsEndpointsDeAcaoPassamPeloPontoUnico:
         faltando = [nome for nome in ENDPOINTS_DE_ACAO if not _chama(achados[nome], "summary_after_commit")]
         assert faltando == [], faltando
 
+    def test_a_column_property_nao_expira_no_flush(self):
+        """Metade (a) da correcao, travada SEM banco: quem apagar
+        `expire_on_flush=False` faz este teste cair, em vez de so os de
+        Postgres (que nao rodam no dia a dia)."""
+        from app.models.listing import Listing
+
+        assert Listing.__mapper__.attrs["approved_image_count"].expire_on_flush is False
+
 
 def _ids_em_ordem(rows):
     return [r.id for r in sorted(rows, key=lambda r: r.sort_order) if r.sort_order < 90]
@@ -194,6 +202,58 @@ class TestSerializarDepoisDoCommit:
                 resumo = await svc.summary_after_commit(listing)
             assert resumo.status == "generating_title"
             assert resumo.approved_image_count == 0
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_rota_images_approve_responde_200_com_a_contagem_nova(self):
+        """O sintoma em producao foi 500 NA ROTA. Aqui a rota real
+        (`ASGITransport`), com a sessao real do Postgres dedicado e o ciclo
+        completo de commit — o teste que teria pegado o bug."""
+        from types import SimpleNamespace
+
+        from httpx import ASGITransport, AsyncClient
+        from sqlalchemy import select
+
+        from app.core.dependencies import get_active_seller, get_current_user, get_db
+        from app.main import app
+        from app.models.listing_image import ListingImage
+
+        engine, sm = await _preparar_banco()
+        try:
+            listing_id, seller_id, user_id = await _semear(sm, _linhas_padrao("cover_ai"))
+            async with sm() as s:
+                rows = (await s.execute(select(ListingImage).where(ListingImage.listing_id == listing_id))).scalars().all()
+            ids = [str(i) for i in _ids_em_ordem(rows)]
+
+            async def _override_get_db():
+                async with sm() as session:
+                    yield session
+
+            async def _override_get_active_seller():
+                return SimpleNamespace(id=seller_id)
+
+            async def _override_get_current_user():
+                return SimpleNamespace(id=user_id)
+
+            app.dependency_overrides[get_db] = _override_get_db
+            app.dependency_overrides[get_active_seller] = _override_get_active_seller
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+            try:
+                with patch("app.workers.tasks.ai_tasks.generate_description") as task:
+                    task.delay = MagicMock()
+                    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                        resp = await client.post(
+                            f"/api/v1/listings/{listing_id}/images/approve",
+                            json={"approved_ids": ids, "review_seconds": 61},
+                        )
+                assert resp.status_code == 200, resp.text
+                corpo = resp.json()
+                assert corpo["status"] == "generating_description"
+                assert corpo["approved_image_count"] == 5
+                task.delay.assert_called_once_with(str(listing_id))
+            finally:
+                app.dependency_overrides.clear()
         finally:
             await engine.dispose()
 

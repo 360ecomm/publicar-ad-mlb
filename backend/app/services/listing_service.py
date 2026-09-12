@@ -71,6 +71,12 @@ class ListingService:
         capa), o operador tem de receber 5, nao o 0 de antes. Reler aqui, uma
         vez, evita repetir a releitura em 11 endpoints. Ver
         tests/test_serializacao_pos_commit.py.
+
+        Atencao: o `refresh` DESCARTA qualquer alteracao ainda nao commitada
+        no `listing` e devolve o que esta no banco — chamar so depois do
+        commit da acao (hoje os tres pontos que escrevem `listing.status`
+        depois do ultimo commit gravaram o mesmo valor por UPDATE antes, entao
+        o resultado e' identico).
         """
         await self.db.refresh(listing)
         return ListingSummary.model_validate(listing)
