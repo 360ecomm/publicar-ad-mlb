@@ -330,6 +330,30 @@ class TestRegenerarPosicaoWorker:
         assert result["status"] == "uploaded" and result["removidas"] == 1
 
     @pytest.mark.asyncio
+    async def test_sucesso_via_fallback_com_placeholder_reprovado_reporta_uploaded(self):
+        """Posicao 0: a IA foi reprovada no QA (o alvo guarda a evidencia como
+        `validation_failed`) e o fallback deterministico subiu em linha nova.
+        `subiu` e' True — a posicao foi ocupada — entao o resultado reportado
+        tem que dizer `uploaded`, nao o status de evidencia do `alvo`."""
+        listing = _listing_pendente()
+        alvo = _placeholder(0, "cover_ai")
+        antiga = _linha(0, asset_key="CAFE085/38/cover_ai-old.jpg")
+
+        async def gerar(db, l, ctx, numero, alvo=None):
+            alvo.status = "validation_failed"; alvo.validation_error = "fundo"
+            return True
+
+        db = _db_worker(alvo, listing, anteriores=[antiga])
+        result = await _rodar(db, gerar, listing.id, alvo.id)
+
+        db.delete.assert_awaited_once_with(antiga)
+        assert result["status"] == "uploaded"
+        assert result["kind"] == "cover_deterministic"
+        assert result["removidas"] == 1
+        assert alvo.status == "validation_failed", "evidencia intocada"
+        assert listing.status == "pending_image_approval"
+
+    @pytest.mark.asyncio
     async def test_contexto_pede_campos_e_copy_so_quando_a_posicao_exige(self):
         """0 e 3: sem campos. 1 e 4: campos sem copy. 2: campos com copy."""
         from app.workers.tasks.image_tasks import _regenerate_position_async

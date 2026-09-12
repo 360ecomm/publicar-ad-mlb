@@ -643,7 +643,11 @@ async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
 
     from app.database import worker_session
     from app.models.listing import Listing
-    from app.models.listing_image import GENERATING_STATUS, ListingImage
+    from app.models.listing_image import (
+        COVER_DETERMINISTIC_KIND,
+        GENERATING_STATUS,
+        ListingImage,
+    )
     from app.models.seller import Seller
     from app.services.ai.cost_log import (
         IMAGE_EDIT_TASK_REGEN,
@@ -751,6 +755,13 @@ async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
 
         # 5) Sucesso: a nova subiu ao ML. As anteriores nao aprovadas saem, com
         # o asset_key de cada uma no log (o objeto no R2 continua la).
+        #
+        # Caso especial (so posicao 0): a IA pode ter sido reprovada no QA —
+        # o PROPRIO `alvo` guarda essa evidencia como `validation_failed` — e
+        # o fallback deterministico ter subido em uma LINHA NOVA. `subiu`
+        # ainda e' True (a posicao foi ocupada, so nao pelo `alvo`), entao o
+        # kind e o status reportados nao podem vir de `alvo`: ele fica com
+        # `validation_failed` de proposito, como evidencia para o humano.
         for a in anteriores:
             await db.delete(a)
         await db.commit()
@@ -759,13 +770,14 @@ async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
                 "regen_posicao listing_id=%s posicao=%s apagada id=%s status=%s asset_key=%s",
                 listing.id, posicao, aid, astatus, akey,
             )
+        kind_resultado = alvo.kind if alvo.status == "uploaded" else COVER_DETERMINISTIC_KIND
         logger.info(
             "regen_posicao listing_id=%s sku=%s posicao=%s image_id=%s kind=%s result=substituida removidas=%s",
-            listing.id, sku, posicao, alvo.id, alvo.kind, len(anteriores_info),
+            listing.id, sku, posicao, alvo.id, kind_resultado, len(anteriores_info),
         )
         return {
             "listing_id": listing_id, "image_id": image_id, "posicao": posicao,
-            "status": alvo.status, "kind": alvo.kind, "removidas": len(anteriores_info),
+            "status": "uploaded", "kind": kind_resultado, "removidas": len(anteriores_info),
         }
 
 
