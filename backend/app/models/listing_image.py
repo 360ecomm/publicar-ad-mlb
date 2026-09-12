@@ -117,6 +117,11 @@ class ListingImage(Base):
                 "approved AND sort_order < 90 AND kind IN ('card_specs', 'specs_ai')"
             ),
         ),
+        # Indice SIMPLES em listing_id (migration f7b3e9c1d2a5): os dois
+        # parciais acima nao servem para "todas as imagens deste anuncio" —
+        # sem ele, a subconsulta de `Listing.approved_image_count` fazia Seq
+        # Scan por linha da listagem (153 ms -> 1,2 ms na pagina de 200).
+        Index("ix_listing_images_listing_id", "listing_id"),
     )
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)

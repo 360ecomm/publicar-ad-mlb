@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4
-from sqlalchemy import DateTime, ForeignKey, SmallInteger, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, SmallInteger, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
@@ -9,6 +9,12 @@ from app.models.base import Base
 
 class ListingJob(Base):
     __tablename__ = "listing_jobs"
+    # Migration f7b3e9c1d2a5: lida so no detalhe (`GET /listings/{id}`), mas
+    # e' a tela mais aberta pelo operador; a tabela so cresce (nada apaga
+    # job) e recebe INSERT num unico ponto do codigo, entao o custo de
+    # escrita do indice e' minimo. Decisao de Daniel (2026-09-12): fica.
+    # DDL identico ao da migration.
+    __table_args__ = (Index("ix_listing_jobs_listing_id", "listing_id"),)
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     listing_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("listings.id"), nullable=False)
