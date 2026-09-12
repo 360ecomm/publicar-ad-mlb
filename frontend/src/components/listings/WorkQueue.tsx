@@ -118,7 +118,8 @@ const SETTINGS_LINK = (
 
 export function WorkQueue() {
   const { activeSeller, isLoading: isSellerLoading } = useSeller()
-  const [filter, setFilter] = useState<QueueFilter>({ group: null, status: null })
+  // Abre já filtrada em "Esperando você": decisão de produto (Daniel, 2026-09-12), não acaso.
+  const [filter, setFilter] = useState<QueueFilter>({ group: "waiting", status: null })
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(1)
   const debouncedSearch = useDebouncedValue(search.trim(), SEARCH_DELAY_MS)
