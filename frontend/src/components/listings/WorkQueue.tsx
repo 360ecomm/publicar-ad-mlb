@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { formatDistanceToNow } from "date-fns"
 import { ptBR } from "date-fns/locale"
-import { ChevronRight, Loader2, RefreshCw, Search, ListChecks } from "lucide-react"
+import { ChevronRight, ImageOff, Loader2, RefreshCw, Search, ListChecks } from "lucide-react"
 import { getListings, getStatusCounts } from "@/lib/api/listings"
 import { ApiError } from "@/lib/api/client"
 import { useSeller } from "@/contexts/SellerContext"
@@ -23,6 +23,8 @@ import { StatusSummaryBar, type QueueFilter } from "./StatusSummaryBar"
 
 const PAGE_SIZE = 50
 const SEARCH_DELAY_MS = 300
+/** Esquema de 5 posições: galeria completa tem 5 imagens oficiais aprovadas. */
+const FULL_GALLERY = 5
 
 /** `failed_step` guarda o status em que o anúncio parou; rótulo pelo STATUS_LABELS. */
 function failedStepLabel(step: string | null | undefined): string {
@@ -36,6 +38,9 @@ function QueueRow({ listing, index }: { listing: ListingSummary; index: number }
   const detailHref = `/listings/${listing.id}`
   const isEven = index % 2 === 0
   const isFailed = listing.status === "failed"
+  // Aviso, não falha: zero aprovadas é "ainda não revisado" e não recebe marca.
+  const isIncomplete =
+    listing.approved_image_count > 0 && listing.approved_image_count < FULL_GALLERY
 
   const go = () => router.push(destination.href)
 
@@ -65,16 +70,28 @@ function QueueRow({ listing, index }: { listing: ListingSummary; index: number }
         {listing.selected_title ? (
           <span className="block truncate font-medium text-foreground">{listing.selected_title}</span>
         ) : (
-          // O resumo do backend ainda não traz a descrição de origem (ver relatório da tarefa 2)
-          <span className="block truncate text-muted-foreground italic">Sem título</span>
+          <span
+            className="block truncate text-muted-foreground italic"
+            title="Descrição de origem: o título ainda não foi escolhido"
+          >
+            {listing.sku_description}
+          </span>
+        )}
+        {isIncomplete && (
+          <span
+            className="inline-flex items-center gap-1 mt-0.5 text-[11px] text-amber-700 dark:text-amber-400"
+            title={`${listing.approved_image_count} de ${FULL_GALLERY} imagens aprovadas`}
+          >
+            <ImageOff className="w-3 h-3" />
+            Incompleto ({listing.approved_image_count}/{FULL_GALLERY})
+          </span>
         )}
         {listing.mlb_id && (
           <span className="block font-mono text-[11px] text-blue-600 dark:text-blue-400">{listing.mlb_id}</span>
         )}
       </td>
       <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
-        {/* ml_category_id não vem no ListingSummary hoje (ver relatório da tarefa 2) */}
-        —
+        {listing.ml_category_id ?? "—"}
       </td>
       <td className="px-4 py-2.5 whitespace-nowrap">
         <ListingStatusBadge status={listing.status} />

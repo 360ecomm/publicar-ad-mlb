@@ -1,10 +1,11 @@
 from decimal import Decimal
 from typing import Optional
 from uuid import uuid4
-from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, Text, text
+from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, Text, func, select, text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
+from app.models.listing_image import CANDIDATE_SORT_ORDER_FLOOR, ListingImage
 
 
 # Ordem do pipeline (mesma do `ListingStatus` do frontend). E' a lista que a
@@ -92,4 +93,27 @@ class Listing(Base, TimestampMixin):
     )
     review_events: Mapped[list["ListingReviewEvent"]] = relationship(
         "ListingReviewEvent", back_populates="listing", cascade="all, delete-orphan"
+    )
+
+    # Quantas imagens OFICIAIS aprovadas o anuncio tem: `approved` e posicao
+    # abaixo de `CANDIDATE_SORT_ORDER_FLOOR` (candidata aprovada em 90/91 nao
+    # conta). E' o que a fila usa para marcar anuncio incompleto (< 5).
+    #
+    # `column_property` com subconsulta correlata, de proposito: sai na MESMA
+    # consulta de qualquer `select(Listing)` — a listagem de ate 200 linhas
+    # continua em 2 statements (contagem + pagina), e os endpoints que fazem
+    # `ListingSummary.model_validate(listing)` num objeto carregado ou
+    # `refresh`ado recebem o valor certo sem uma consulta a mais. Nao usar
+    # `deferred=True`: no async, o carregamento tardio estoura MissingGreenlet
+    # na serializacao. Objeto ainda nao carregado do banco (criado e nao
+    # `flush`+`refresh`) tem o atributo None.
+    approved_image_count: Mapped[int] = column_property(
+        select(func.count(ListingImage.id))
+        .where(
+            ListingImage.listing_id == id,
+            ListingImage.approved.is_(True),
+            ListingImage.sort_order < CANDIDATE_SORT_ORDER_FLOOR,
+        )
+        .correlate_except(ListingImage)
+        .scalar_subquery()
     )

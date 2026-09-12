@@ -49,10 +49,18 @@ class ListingSummary(BaseModel):
     sku_external_id: Optional[str]
     sku_brand: str
     selected_title: Optional[str]
+    # Descricao de origem: o unico texto que existe antes de o titulo ser
+    # escolhido. A fila mostra no lugar do titulo quando `selected_title` e' NULL.
+    sku_description: str
+    ml_category_id: Optional[str]
     status: str
     failed_step: Optional[str] = None
     created_via: str
     mlb_id: Optional[str]
+    # Calculado no model (`Listing.approved_image_count`, column_property):
+    # imagens aprovadas com sort_order < CANDIDATE_SORT_ORDER_FLOOR. A fila
+    # marca "incompleto" quando 0 < n < 5; zero e' "ainda nao revisado".
+    approved_image_count: int
     created_at: datetime
     updated_at: datetime
 
@@ -142,12 +150,13 @@ class ImageApproveRequest(BaseModel):
 
 
 class ListingDetail(ListingSummary):
-    sku_description: str
+    # `sku_description`, `ml_category_id` e `approved_image_count` vem de
+    # ListingSummary (a contagem sai na mesma linha do listing, sem consulta
+    # extra; a lista `images` abaixo e' quem detalha).
     price: Decimal
     stock_quantity: int
     condition: str
     listing_type_id: str
-    ml_category_id: Optional[str]
     error_message: Optional[str]
     description_html: Optional[str] = None
     titles: list[TitleOption] = []

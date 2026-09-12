@@ -23,6 +23,14 @@ export interface ListingSummary {
   sku_external_id: string | null
   sku_brand: string
   selected_title: string | null
+  /** Descrição de origem: o único texto que existe antes de o título ser escolhido. */
+  sku_description: string
+  ml_category_id: string | null
+  /**
+   * Imagens oficiais aprovadas (sort_order < 90), calculado no backend.
+   * 0 = ainda não revisado; 1–4 = anúncio incompleto; 5 = galeria completa.
+   */
+  approved_image_count: number
   status: ListingStatus
   created_via: "manual" | "batch"
   mlb_id: string | null

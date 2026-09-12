@@ -77,6 +77,8 @@ class TestImageBytesNeverLoadedOnTheUiPath:
             mlb_id=None,
             created_at=agora,
             updated_at=agora,
+            # column_property: objeto nao carregado do banco teria None
+            approved_image_count=0,
             price=Decimal("10.00"),
             stock_quantity=1,
             condition="new",

@@ -71,6 +71,7 @@ async def _load_detail(db: AsyncSession, listing: Listing) -> ListingDetail:
         condition=listing.condition,
         listing_type_id=listing.listing_type_id,
         ml_category_id=listing.ml_category_id,
+        approved_image_count=listing.approved_image_count,
         error_message=listing.error_message,
         description_html=desc_row.description_html if desc_row else None,
         titles=[TitleOption.model_validate(t) for t in titles],

@@ -86,6 +86,7 @@ class TestEndpointDetalhe:
             status="pending_image_approval", created_via="batch", mlb_id=None,
             created_at=agora, updated_at=agora, price=Decimal("10.00"), stock_quantity=1,
             condition="new", listing_type_id="gold_special", ml_category_id=None, error_message=None,
+            approved_image_count=0,  # column_property: objeto nao carregado do banco teria None
         )
 
     @pytest.mark.asyncio
