@@ -164,6 +164,43 @@ class TestGerarPosicaoIsolada:
         assert (img.kind, img.sort_order) == ("cover_deterministic", 0)
 
     @pytest.mark.asyncio
+    async def test_posicao_0_reprovada_no_qa_guarda_evidencia_e_fallback_em_linha_nova(self):
+        """IA produz, QA reprova: o placeholder GUARDA a evidencia
+        (validation_failed) e o fallback deterministico vai para uma linha
+        NOVA — nunca sobrescreve a evidencia da reprovacao."""
+        from app.services.image_service import ImageValidationResult
+        from app.workers.tasks.image_tasks import _gerar_posicao
+
+        db = _db_com_atributos(_atributos_sku38())
+        alvo = _placeholder(0, "cover_ai")
+        with _Ambiente() as amb:
+            ctx = await _contexto(db, com_campos=False)
+            assert ctx.base == b"preparado"
+            # A partir daqui, o QA reprova: a capa deterministica computada em
+            # `_montar_contexto` ja passou pelo QA (ctx.base ficou pronta); so
+            # a tentativa da IA em `_gerar_posicao` e' que sera reprovada.
+            amb.prepare.return_value = (
+                None, ImageValidationResult(is_valid=False, errors=["reprovado"])
+            )
+            ok = await _gerar_posicao(db, _listing(), ctx, 0, alvo=alvo)
+
+        assert ok is True
+        assert len(amb.prompts) == 1, "uma chamada de IA, depois o fallback sem IA"
+
+        assert alvo.status == "validation_failed"
+        assert alvo.kind == "cover_ai"
+        assert alvo.ml_picture_id is None
+        assert alvo.asset_key == "asset-key-teste"
+        assert alvo.validation_error
+
+        db.add.assert_called_once()
+        (nova,) = _salvos(db)
+        assert nova.kind == "cover_deterministic"
+        assert nova.status == "uploaded"
+        assert nova.sort_order == 0
+        assert nova.approved is False
+
+    @pytest.mark.asyncio
     async def test_posicao_2_sem_copy_devolve_false_sem_chamar_o_motor(self):
         from app.workers.tasks.image_tasks import _gerar_posicao
 
