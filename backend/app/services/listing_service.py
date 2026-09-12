@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,8 @@ from app.models.user import User
 from app.models.seller import Seller
 from app.schemas.listing import ListingCreate, ListingPage, ListingStatusCounts, ListingSummary
 from app.schemas.bulk import BulkItemResult, BulkResult
+
+logger = logging.getLogger(__name__)
 
 
 def _mensagem_regeneracao_em_andamento(posicoes: list[int]) -> str:
@@ -423,7 +426,24 @@ class ListingService:
         await self.db.refresh(placeholder)
 
         from app.workers.tasks.image_tasks import regenerate_position
-        regenerate_position.delay(str(listing.id), str(placeholder.id))
+        try:
+            regenerate_position.delay(str(listing.id), str(placeholder.id))
+        except Exception as exc:  # broker fora (Redis): sem task, o placeholder
+            # seria uma trava eterna — bloqueia as aprovacoes deste anuncio e o
+            # indice unico parcial recusa qualquer nova tentativa na posicao.
+            await self.db.delete(placeholder)
+            await self.db.commit()
+            logger.error(
+                "regen_posicao listing_id=%s posicao=%s result=fila_indisponivel reason=%s",
+                listing.id, posicao, exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Fila de processamento indisponível no momento; o pedido não foi "
+                    "registrado. Tente de novo em instantes."
+                ),
+            )
         return placeholder
 
     async def recusar_se_regeneracao_em_andamento(self, listing: Listing) -> None:

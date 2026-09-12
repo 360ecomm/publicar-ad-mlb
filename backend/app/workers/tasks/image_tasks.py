@@ -638,6 +638,35 @@ async def _falhar_regeneracao(db, alvo, motivo: str) -> dict:
     }
 
 
+_MOTIVO_PRE_REQUISITO = {
+    1: "produto sem nome/modelo no catálogo: a posição 1 (apresentação) não tem o que escrever",
+    2: (
+        "o LLM não devolveu copy de benefícios para este produto; tente de novo "
+        "ou revise a descrição do produto"
+    ),
+    4: "sem atributos preenchidos para montar a ficha técnica",
+}
+
+
+def _pre_requisito_faltando(posicao: int, ctx) -> str | None:
+    """Motivo PROPRIO quando a posicao seria pulada sem chamar o motor.
+
+    `_gerar_posicao` devolve False tanto quando o motor foi chamado e falhou
+    quanto quando o pre-requisito de dado nem existia (posicao 1 sem nome, 2
+    sem copy, 4 sem ficha). Na regeneracao os dois casos virariam o mesmo
+    "o motor nao produziu imagem valida", que manda o operador clicar de novo
+    num problema que nao e' do motor. Aqui a distincao e' feita ANTES.
+    """
+    campos = ctx.campos or {}
+    if posicao == 1 and not campos.get("nome"):
+        return _MOTIVO_PRE_REQUISITO[1]
+    if posicao == 2 and campos.get("beneficios") is None:
+        return _MOTIVO_PRE_REQUISITO[2]
+    if posicao == 4 and campos.get("ficha") is None:
+        return _MOTIVO_PRE_REQUISITO[4]
+    return None
+
+
 async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
     from sqlalchemy import delete as sa_delete, select
 
@@ -737,6 +766,10 @@ async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
                 db, listing, access_token, profile, fotos, sku,
                 com_campos=posicao in (1, 2, 4), com_copy=(posicao == 2),
             )
+            faltando = _pre_requisito_faltando(posicao, ctx)
+            if faltando is not None:
+                # Sem chamar o motor: o problema e' de DADO, nao de geracao.
+                return await _falhar_regeneracao(db, alvo, faltando)
             subiu = await _gerar_posicao(db, listing, ctx, posicao, alvo=alvo)
         except ImageEngineUnavailableError as exc:
             # Motor fora: NAO e' standby do anuncio (o beat retomaria as 5).
@@ -746,7 +779,11 @@ async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
             alvo = (
                 await db.execute(select(ListingImage).where(ListingImage.id == image_id))
             ).scalar_one()
-            return await _falhar_regeneracao(db, alvo, f"Motor de imagem indisponível: {exc}")
+            # Texto do provedor truncado: `validation_error` vai para a tela e
+            # a mensagem crua pode trazer corpo de resposta inteiro.
+            return await _falhar_regeneracao(
+                db, alvo, f"Motor de imagem indisponível: {str(exc)[:200]}"
+            )
 
         if not subiu:
             if alvo.status == GENERATING_STATUS:
@@ -832,7 +869,9 @@ async def _mark_regen_failed(image_id: str, error: str) -> None:
                 await db.execute(select(ListingImage).where(ListingImage.id == image_id))
             ).scalar_one_or_none()
             if alvo is not None and alvo.status == GENERATING_STATUS:
-                await _falhar_regeneracao(db, alvo, error)
+                # Trunca: `error` e' o str() de uma excecao qualquer (pode ser o
+                # corpo inteiro de uma resposta HTTP) e o motivo vai para a tela.
+                await _falhar_regeneracao(db, alvo, str(error)[:200])
     except Exception as mark_exc:
         logger.error(
             "Could not mark regeneration %s as failed (original error: %s): %s",

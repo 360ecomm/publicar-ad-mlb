@@ -426,6 +426,41 @@ class TestRegenerarPosicaoWorker:
         assert listing.status == "pending_image_approval"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("posicao,campos,trecho", [
+        (1, {"nome": None, "marca": "W", "volume": "200 ml"}, "sem nome/modelo no catálogo"),
+        (2, {"nome": "x", "beneficios": None}, "não devolveu copy de benefícios"),
+        (4, {"nome": "x", "ficha": None}, "sem atributos preenchidos"),
+    ])
+    async def test_pre_requisito_ausente_falha_com_motivo_proprio_sem_chamar_o_motor(
+        self, posicao, campos, trecho
+    ):
+        """Posicao pulada por falta de DADO nao pode virar "o motor nao produziu
+        imagem valida": o operador clicaria de novo num problema que nao e' do
+        motor."""
+        from contextlib import ExitStack
+
+        from app.workers.tasks.image_tasks import _regenerate_position_async
+
+        listing = _listing_pendente()
+        alvo = _placeholder(posicao, "x")
+        gerar = AsyncMock()
+        db = _db_worker(alvo, listing)
+        ctx = MagicMock(); ctx.campos = campos
+        with ExitStack() as stack:
+            patches = _patches_worker(db, gerar)
+            for p in patches[:3] + patches[4:]:
+                stack.enter_context(p)
+            stack.enter_context(patch("app.workers.tasks.image_tasks._montar_contexto",
+                                      new_callable=AsyncMock, return_value=ctx))
+            result = await _regenerate_position_async(str(listing.id), str(alvo.id))
+
+        gerar.assert_not_awaited()
+        assert result["status"] == "generation_failed"
+        assert trecho in alvo.validation_error
+        assert "motor de imagem não produziu" not in alvo.validation_error
+        assert listing.status == "pending_image_approval"
+
+    @pytest.mark.asyncio
     async def test_contexto_pede_campos_e_copy_so_quando_a_posicao_exige(self):
         """0 e 3: sem campos. 1 e 4: campos sem copy. 2: campos com copy."""
         from app.workers.tasks.image_tasks import _regenerate_position_async
@@ -513,6 +548,22 @@ class TestRegenerarPosicaoWorker:
         assert result["status"] == "generation_failed"
 
     @pytest.mark.asyncio
+    async def test_motor_indisponivel_trunca_o_texto_cru_do_provedor(self):
+        from app.services.image_engines.base import ImageEngineUnavailableError
+
+        listing = _listing_pendente()
+        alvo = _placeholder(2, "benefits_ai")
+
+        async def gerar(db, l, ctx, numero, alvo=None):
+            raise ImageEngineUnavailableError("y" * 5000)
+
+        recarga = MagicMock(scalar_one=MagicMock(return_value=alvo))
+        db = _db_worker(alvo, listing, extra=[recarga])
+        await _rodar(db, gerar, listing.id, alvo.id)
+
+        assert alvo.validation_error == "Motor de imagem indisponível: " + "y" * 200
+
+    @pytest.mark.asyncio
     async def test_fotos_brutas_ausentes_vira_generation_failed(self):
         from contextlib import ExitStack
 
@@ -582,6 +633,12 @@ class TestRegenerarPosicaoWorker:
         with patch("app.database.worker_session", lambda: _sessao(db)):
             await _mark_regen_failed(str(alvo.id), "boom")
         assert alvo.status == "generation_failed" and alvo.validation_error == "boom"
+
+        longo = _placeholder(2, "benefits_ai")
+        db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=longo)))
+        with patch("app.database.worker_session", lambda: _sessao(db)):
+            await _mark_regen_failed(str(longo.id), "x" * 5000)
+        assert longo.validation_error == "x" * 200, "texto cru do provedor e' truncado"
 
         ja_pronto = _placeholder(2, "benefits_ai"); ja_pronto.status = "uploaded"
         db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=ja_pronto)))

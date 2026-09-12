@@ -108,6 +108,28 @@ class TestRegenerarPosicaoService:
         assert exc.value.detail == "Regeneração em andamento na posição 2; aguarde."
         db.rollback.assert_awaited_once(); task.delay.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_broker_fora_apaga_o_placeholder_e_devolve_503(self):
+        """Sem task, o placeholder viraria trava eterna: bloqueia as aprovacoes
+        do anuncio e o indice unico parcial recusa qualquer nova tentativa na
+        posicao. O pedido tem que ser desfeito."""
+        from app.services.listing_service import ListingService
+
+        db = _db_com_linhas([_linha(approved=False)])
+        commits = []
+        db.commit = AsyncMock(side_effect=lambda: commits.append(1))
+        with patch("app.workers.tasks.image_tasks.regenerate_position") as task:
+            task.delay = MagicMock(side_effect=Exception("redis down"))
+            with pytest.raises(HTTPException) as exc:
+                await ListingService(db).regenerate_position(_listing(), 2)
+
+        assert exc.value.status_code == 503
+        assert "não foi registrado" in exc.value.detail
+        db.delete.assert_awaited_once()
+        (apagado,) = db.delete.await_args.args
+        assert apagado.status == "generating" and apagado.sort_order == 2
+        assert len(commits) == 2, "commit do placeholder + commit da remocao"
+
 
 def test_rota_declarada_com_202_e_image_out():
     from app.main import app
