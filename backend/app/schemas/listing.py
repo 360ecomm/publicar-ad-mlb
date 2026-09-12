@@ -66,6 +66,15 @@ class ListingPage(BaseModel):
     page_size: int
 
 
+class ListingStatusCounts(BaseModel):
+    """Contagem de anuncios do seller ativo por status. `by_status` traz TODOS
+    os status de `LISTING_STATUSES` (zero quando nao ha anuncio) e, se o banco
+    tiver algum status fora da lista (legado), ele tambem aparece — nenhum
+    anuncio some da conta. `total` e' a soma."""
+    by_status: dict[str, int]
+    total: int
+
+
 class TitleOption(BaseModel):
     id: UUID
     title_text: str

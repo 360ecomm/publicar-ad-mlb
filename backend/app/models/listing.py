@@ -7,6 +7,28 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
 
 
+# Ordem do pipeline (mesma do `ListingStatus` do frontend). E' a lista que a
+# barra de resumo da fila usa: cada status aparece SEMPRE, com zero quando
+# nao ha anuncio, pra barra nao mudar de tamanho a cada atualizacao.
+LISTING_STATUSES: tuple[str, ...] = (
+    "draft",
+    "generating_title",
+    "pending_title_approval",
+    "predicting_category",
+    "pending_seller_attributes",
+    "pending_description",
+    "generating_images",
+    "pending_raw_photos",
+    "pending_ai_engine",
+    "pending_image_approval",
+    "generating_description",
+    "ready_to_publish",
+    "publishing",
+    "published",
+    "published_paused",
+    "failed",
+)
+
 
 class Listing(Base, TimestampMixin):
     __tablename__ = "listings"

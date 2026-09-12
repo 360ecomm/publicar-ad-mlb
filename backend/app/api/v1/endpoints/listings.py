@@ -17,6 +17,7 @@ from app.schemas.listing import (
     ListingCreate,
     ListingDetail,
     ListingPage,
+    ListingStatusCounts,
     ListingSummary,
 )
 from app.schemas.attribute import AttributesSubmitRequest
@@ -98,6 +99,19 @@ async def list_listings(
     db: AsyncSession = Depends(get_db),
 ):
     return await ListingService(db).list_listings(active_seller.id, status, page, page_size)
+
+
+@router.get("/status-counts", response_model=ListingStatusCounts)
+async def listing_status_counts(
+    active_seller=Depends(get_active_seller),
+    db: AsyncSession = Depends(get_db),
+):
+    """Barra de resumo da fila: contagem por status do seller ativo, em uma
+    consulta agregada. Fica ANTES de `/{listing_id}` de proposito — FastAPI
+    casa rotas na ordem de declaracao, e declarada depois, "status-counts"
+    cairia no parametro `{listing_id}`, falharia no parse de UUID e devolveria
+    422 em vez do resumo."""
+    return await ListingService(db).count_by_status(active_seller.id)
 
 
 @router.get("/{listing_id}", response_model=ListingDetail)

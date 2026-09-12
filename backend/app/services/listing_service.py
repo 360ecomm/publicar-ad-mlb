@@ -3,7 +3,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from sqlalchemy import update as sa_update, delete as sa_delete
-from app.models.listing import Listing
+from app.models.listing import LISTING_STATUSES, Listing
 from app.models.listing_title import ListingTitle
 from app.models.listing_attribute import ListingAttribute
 from app.models.listing_description import ListingDescription
@@ -22,7 +22,7 @@ from app.models.listing_review_event import (
 from app.models.listing_job import ListingJob
 from app.models.user import User
 from app.models.seller import Seller
-from app.schemas.listing import ListingCreate, ListingPage, ListingSummary
+from app.schemas.listing import ListingCreate, ListingPage, ListingStatusCounts, ListingSummary
 from app.schemas.bulk import BulkItemResult, BulkResult
 
 
@@ -78,6 +78,18 @@ class ListingService:
             page=page,
             page_size=page_size,
         )
+
+    async def count_by_status(self, seller_id: UUID) -> ListingStatusCounts:
+        """UMA consulta agregada (GROUP BY status) — nunca carrega linhas."""
+        result = await self.db.execute(
+            select(Listing.status, func.count().label("cnt"))
+            .where(Listing.seller_id == seller_id)
+            .group_by(Listing.status)
+        )
+        by_status = {s: 0 for s in LISTING_STATUSES}
+        for row in result.all():
+            by_status[row.status] = row.cnt
+        return ListingStatusCounts(by_status=by_status, total=sum(by_status.values()))
 
     async def delete(self, listing_id: UUID, seller_id: UUID) -> None:
         listing = await self.get_or_404(listing_id, seller_id)
