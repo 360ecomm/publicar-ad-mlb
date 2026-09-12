@@ -601,7 +601,6 @@ POST   /api/v1/auth/login
 POST   /api/v1/auth/refresh
 GET    /api/v1/auth/ml/connect
 GET    /api/v1/auth/ml/callback
-GET    /api/v1/auth/ml/status
 
 POST   /api/v1/products                    criar produto (409 se SKU já existe)
 PUT    /api/v1/products/{sku}              atualizar produto (todos os campos)
