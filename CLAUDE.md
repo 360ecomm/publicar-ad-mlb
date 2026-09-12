@@ -654,7 +654,9 @@ Rodar com `npm run dev` dentro de `frontend/`. Porta: `http://localhost:3000`
 
 | Rota | Página |
 |---|---|
-| `/` | Anúncios (kanban, polling 8s, botão Novo anúncio) |
+| `/` | Painel de contas: um card por seller conectado com contagem por status, botão "Usar" e link para a fila (`app/(dashboard)/page.tsx`) |
+| `/listings` | **Fila de trabalho** (substituiu o kanban, removido em `2349bb5`): abre filtrada em "Esperando você", barra de resumo com três blocos (Processando / Esperando você / Concluído) vinda de `status-counts`, busca com atraso de 300 ms, paginação de 50, **sem** atualização automática (botão Atualizar), seleção que sobrevive à paginação e ao filtro, ações em massa derivadas do status dos selecionados (Publicar exige confirmação com a lista de SKUs). Clique na linha vai à etapa que espera ação; o SKU é sempre atalho para o detalhe |
+| `/listings/attributes` | Grade de atributos em massa (`AttributeGridEditor`), destino do botão "Preencher atributos" da fila |
 | `/products` | Catálogo de produtos (tabela com zebra striping, expansão fiscal, editar por linha) |
 | `/products/new` | Novo produto (formulário: identificação / fiscal / embalagem) |
 | `/products/[sku]/edit` | Editar produto (mesmo formulário, SKU readonly, staleTime: 0) |
@@ -667,24 +669,40 @@ Rodar com `npm run dev` dentro de `frontend/`. Porta: `http://localhost:3000`
 | `/listings/[id]/images` | Galeria de imagens com aprovação |
 | `/listings/[id]/preview` | Preview + botão publicar |
 | `/settings` | OAuth ML + lista de contas conectadas |
+| `/login` | Login por e-mail e senha |
 
 **UX:**
 - Topbar removida; título em cada página; seletor de seller no rodapé da sidebar
 - Transição suave entre páginas: `key={pathname}` com `animate-in fade-in duration-200`
 - Títulos em PT-BR sentence case
 
-> O quadro (`/`) ainda filtra por `?status=<um>`. A fila de trabalho (bloco B,
-> ainda não implementada) é quem vai consumir `status-counts` + `status`
-> repetido + `search`.
+> **Referência do fluxo do operador (bloco B):** `docs/superpowers/specs/frontend-fluxo-operador.md`.
+> A fila (`/listings`) foi construída em três tarefas, todas em `master` desde 2026-09-12:
+> `e176fb2` (camada de API: `getListings` com `status` repetido e `search`, `getStatusCounts`,
+> `STATUS_GROUPS`), `41c9d6d` (tela) e `2349bb5` (seleção e ações em massa; quadro removido).
+> Regras que ela consome e **não** reimplementa: `is_candidate` e `is_editable` vêm do backend.
+> A marca "Incompleto (n/5)" compara `approved_image_count` com 5 fixo no frontend — pendência
+> registrada no spec (o SKU 37 tem 8 aprovadas).
 
 **Arquivos frontend críticos:**
 - `src/components/layout/Sidebar.tsx` — sidebar com SellerSelector embutido
+- `src/components/listings/WorkQueue.tsx` — a fila: contagens, filtro, busca, tabela, seleção (estado próprio em `Map`), estados de erro e vazio
+- `src/components/listings/StatusSummaryBar.tsx` — os três blocos da barra de resumo; o selecionado expande por status; item "Outros" para status legado
+- `src/components/listings/BulkActionsBar.tsx` — barra fixa de ações em massa, derivadas do status dos selecionados; seleção mista sem ação; diálogo de confirmação só para Publicar
+- `src/components/listings/BulkResultPanel.tsx` — resultado da ação em massa: contagens e, por falha, SKU e motivo saneado
+- `src/lib/status-summary.ts` — agrupa `status-counts` nos três blocos, legado vira "Outros", `balanced` confere a soma contra `total`
+- `src/lib/bulk-actions.ts` — ação por status, seleção mista, `sanitizeBulkError` (SQL/Traceback/sqlalchemy/texto longo nunca vão para a tela), `summarizeBulkResult`
+- `src/lib/listing-destination.ts` — para onde a linha da fila leva, por status
+- `src/hooks/useDebouncedValue.ts` — atraso da busca (300 ms), escrito à mão
+- `src/components/listings/ListingStatusBadge.tsx` — único lugar que pinta status
 - `src/components/products/ProductForm.tsx` — formulário compartilhado criar/editar produto
 - `src/lib/api/client.ts` — fetch wrapper (Bearer, redirect 401)
 - `src/lib/api/products.ts`, `listings.ts`, `auth.ts`, `sellers.ts`, `import.ts`
 - `src/lib/download-template.ts` — ExcelJS: `downloadProductTemplate()`, `downloadListingTemplate()`
 - `src/lib/utils.ts` — `formatPrice()`, `formatQuantity()` (usam `Number()` antes de `toLocaleString`)
-- `src/types/product.ts`, `types/listing.ts`
+- `src/types/product.ts`, `types/listing.ts` (`ListingStatus`, `STATUS_LABELS`, `STATUS_GROUP_OF`/`STATUS_GROUPS`, `StatusCounts`, `ListingSummary` com `sku_description`, `ml_category_id`, `approved_image_count`)
+
+> **Não existem mais:** `PipelineBoard.tsx`, `ListingCard.tsx` e a rota `/listings/board` — removidos em `2349bb5`. Não procurar por eles.
 
 > **Nota:** o padrão `lib/` do `.gitignore` é artefato de build Python; desde `5f92130`, `!frontend/src/lib/` reinclui este diretório. Arquivos novos aqui entram com `git add` normal.
 
