@@ -483,7 +483,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `b3e7a1c9d5f2` — cria `listing_review_events` (FK de `listing_id` com `ON DELETE CASCADE`)
 - `c8d2f6a4e1b7` — drop de `listing_images.review_seconds` (o tempo de revisão vive só no evento)
 - `d4e8b2a6f9c1` — índice composto `ix_listings_seller_status_created` (seller_id, status, created_at DESC)
-- `e5f9c3b7a2d4` — `listing_attributes.tags` (JSONB nullable, sem preenchimento retroativo: linhas antigas ficam NULL = editáveis) (head atual)
+- `e5f9c3b7a2d4` — `listing_attributes.tags` (JSONB nullable, sem preenchimento retroativo: linhas antigas ficam NULL = editáveis)
+- `f7b3e9c1d2a5` — índices simples em `listing_id` de `listing_images` (`ix_listing_images_listing_id`, coexiste com os dois parciais de slot), `listing_titles` e `listing_jobs`. As outras 4 FKs sem índice (`listings.created_by`, `batch_imports.created_by`, `listing_review_events.user_id`, `batch_import_rows.listing_id`) ficaram de fora de propósito: nenhuma consulta filtra por elas (ver docstring da migração) (head atual)
 
 ---
 
