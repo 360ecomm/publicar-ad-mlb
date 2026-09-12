@@ -139,13 +139,23 @@ export async function resumeAiEngine(id: string): Promise<ListingSummary> {
   )
 }
 
+/**
+ * Aprova as imagens de um anúncio.
+ *
+ * `approved_ids` na ORDEM em que devem ser publicadas: o backend renumera o
+ * `sort_order` na ordem em que os ids chegam (CLAUDE.md, "A aprovação
+ * individual renumera"). `review_seconds` é o tempo da revisão humana medido
+ * pela tela; o backend aceita `null` (`ge=0`), mas todo evento de revisão
+ * nascia sem tempo porque o frontend não enviava.
+ */
 export async function approveImages(
   id: string,
-  approved_ids: string[]
+  approved_ids: string[],
+  review_seconds?: number | null
 ): Promise<ListingSummary> {
   return apiFetch<ListingSummary>(`/api/v1/listings/${id}/images/approve`, {
     method: "POST",
-    body: JSON.stringify({ approved_ids }),
+    body: JSON.stringify({ approved_ids, review_seconds: review_seconds ?? null }),
   })
 }
 
