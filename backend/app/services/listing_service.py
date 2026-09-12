@@ -71,6 +71,10 @@ class ListingService:
             query = query.where(Listing.status.in_(statuses))
 
         # Mesmo padrao de `ProductService.list_products`: ilike + or_.
+        # `sku_description` entra porque, antes de o titulo ser escolhido
+        # (draft ate pending_title_approval), `selected_title` e' NULL — e e'
+        # justamente com o anuncio parado esperando revisao que o operador o
+        # procura. A descricao de origem e' o unico texto sempre preenchido.
         term = (search or "").strip()
         if term:
             like = f"%{term}%"
@@ -78,6 +82,7 @@ class ListingService:
                 or_(
                     Listing.sku_external_id.ilike(like),
                     Listing.selected_title.ilike(like),
+                    Listing.sku_description.ilike(like),
                     Listing.sku_brand.ilike(like),
                     Listing.mlb_id.ilike(like),
                 )

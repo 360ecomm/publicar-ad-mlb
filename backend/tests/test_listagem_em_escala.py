@@ -61,6 +61,8 @@ async def _semear(session_maker, especificacao):
     - `sku` -> `Listing.sku_external_id`
     - `title` -> `Listing.selected_title`
     - `brand` -> `Listing.sku_brand` (default "b")
+    - `description` -> `Listing.sku_description` (default "d"; e' o unico
+      campo de texto que SEMPRE existe, mesmo antes de o titulo ser escolhido)
     - `mlb_id` -> `Listing.mlb_id` (UNIQUE na tabela: se a chave for
       OMITIDA, gera um valor distinto usando o contador de modulo, pra nao
       colidir entre listings de testes diferentes; se vier explicitamente
@@ -106,7 +108,7 @@ async def _semear(session_maker, especificacao):
                         seller_id=seller.id,
                         created_by=user.id,
                         sku_external_id=spec.get("sku"),
-                        sku_description="d",
+                        sku_description=spec.get("description", "d"),
                         sku_brand=spec.get("brand", "b"),
                         price=10,
                         stock_quantity=1,
@@ -429,6 +431,47 @@ class TestBusca:
                 )
             assert pagina.total == 1, pagina.total
             assert pagina.items[0].sku_external_id == "SKU-BETA"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_busca_por_sku_description_sem_titulo(self):
+        """Antes de o titulo ser escolhido (draft, generating_title,
+        pending_title_approval...), `selected_title` e' NULL — e e' justamente
+        nesse momento que o operador procura um anuncio parado. A descricao de
+        origem (`sku_description`) e' o unico campo de texto sempre preenchido,
+        entao a busca precisa casar por ela. O termo ("hidratante") nao aparece
+        em SKU, marca nem mlb_id: so a clausula de `sku_description` pode fazer
+        esta busca casar."""
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            user_id, (seller_a,) = await _semear(
+                sm,
+                [[
+                    {
+                        "status": "pending_title_approval",
+                        "sku": "SKU-DELTA",
+                        "title": None,
+                        "brand": "Nivea",
+                        "description": "Hidratante Corporal 200ml",
+                    },
+                    {
+                        "status": "draft",
+                        "sku": "SKU-EPSILON",
+                        "title": None,
+                        "brand": "Outra",
+                        "description": "Sabonete Liquido 250ml",
+                    },
+                ]],
+            )
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="hidratante"
+                )
+            assert pagina.total == 1, pagina.total
+            assert pagina.items[0].sku_external_id == "SKU-DELTA"
         finally:
             await engine.dispose()
 

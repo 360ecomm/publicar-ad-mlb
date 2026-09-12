@@ -101,7 +101,9 @@ async def list_listings(
 ):
     """`status` aceita repeticao (`?status=a&status=b`): cada agrupamento da
     fila junta 3 ou 4 status. Um so (`?status=a`) continua igual a hoje — o
-    quadro atual depende disso. `search` casa por SKU, titulo, marca e MLB."""
+    quadro atual depende disso. `search` casa por SKU, titulo, descricao de
+    origem (`sku_description`, o unico texto que existe antes do titulo),
+    marca e MLB."""
     return await ListingService(db).list_listings(
         active_seller.id, status, page, page_size, search=search
     )
