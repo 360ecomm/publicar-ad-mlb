@@ -57,6 +57,24 @@ class ListingService:
         await self.db.refresh(listing)
         return listing
 
+    async def summary_after_commit(self, listing: Listing) -> ListingSummary:
+        """Serializa o anuncio DEPOIS de uma acao commitada, com o valor certo.
+
+        Unico caminho dos endpoints de acao que devolvem `ListingSummary`
+        (start, retry, select_title, attributes, generate_images, resume_*,
+        approve_images, publish, promote_*). O `refresh` custa uma consulta
+        e existe por dois motivos: (1) `approved_image_count` e' uma
+        column_property que o flush deixava expirada — hoje tem
+        `expire_on_flush=False`, entao serializar nao estoura mais, mas o
+        valor em memoria e' o do carregamento; (2) em acoes que MUDAM a
+        contagem na propria requisicao (aprovar 5 imagens, promover uma
+        capa), o operador tem de receber 5, nao o 0 de antes. Reler aqui, uma
+        vez, evita repetir a releitura em 11 endpoints. Ver
+        tests/test_serializacao_pos_commit.py.
+        """
+        await self.db.refresh(listing)
+        return ListingSummary.model_validate(listing)
+
     async def get_or_404(self, listing_id: UUID, seller_id: UUID) -> Listing:
         result = await self.db.execute(
             select(Listing).where(Listing.id == listing_id, Listing.seller_id == seller_id)

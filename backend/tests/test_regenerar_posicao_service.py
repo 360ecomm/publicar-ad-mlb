@@ -289,6 +289,10 @@ class TestCercaDasPromocoes:
         svc = MagicMock()
         svc.get_or_404 = AsyncMock(return_value=listing)
         svc.recusar_se_regeneracao_em_andamento = AsyncMock(side_effect=cerca)
+        # Desde a correcao de `approved_image_count` pos-commit, o endpoint
+        # serializa por `svc.summary_after_commit` (async), nao mais por
+        # `ListingSummary.model_validate` solto.
+        svc.summary_after_commit = AsyncMock()
         promocao = AsyncMock(side_effect=lambda *a, **k: ordem.append("promocao"))
         return svc, promocao, [
             patch.object(rota, "ListingService", return_value=svc),

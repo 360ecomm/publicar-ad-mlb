@@ -187,7 +187,7 @@ async def start_pipeline(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.start_pipeline(listing)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/pipeline/retry", response_model=ListingSummary)
@@ -199,7 +199,7 @@ async def retry_pipeline(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.retry_pipeline(listing)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/titles/{title_id}/select", response_model=ListingSummary)
@@ -212,7 +212,7 @@ async def select_title(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.select_title(listing, title_id)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.put("/{listing_id}/attributes", response_model=ListingSummary)
@@ -225,7 +225,7 @@ async def submit_attributes(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.submit_attributes(listing, [a.model_dump() for a in body.attributes])
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/pipeline/generate_images", response_model=ListingSummary)
@@ -237,7 +237,7 @@ async def generate_images(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.trigger_image_generation(listing)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/pipeline/resume_raw_photos", response_model=ListingSummary)
@@ -251,7 +251,7 @@ async def resume_raw_photos(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.resume_raw_photos(listing)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/pipeline/resume_ai_engine", response_model=ListingSummary)
@@ -265,7 +265,7 @@ async def resume_ai_engine(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.resume_ai_engine(listing)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/images/approve", response_model=ListingSummary)
@@ -279,7 +279,7 @@ async def approve_images(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.approve_images(listing, body.approved_ids, body.review_seconds, user_id=current_user.id)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post(
@@ -316,7 +316,7 @@ async def publish_listing(
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.trigger_publish(listing)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/activate")
@@ -416,7 +416,7 @@ async def promote_cover(
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.recusar_se_regeneracao_em_andamento(listing)
     await _promote_cover(db, listing, image_id)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/images/{image_id}/promote-specs", response_model=ListingSummary)
@@ -447,7 +447,7 @@ async def promote_specs(
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.recusar_se_regeneracao_em_andamento(listing)
     await _promote_specs(db, listing, image_id)
-    return ListingSummary.model_validate(listing)
+    return await svc.summary_after_commit(listing)
 
 
 @router.post("/{listing_id}/images/specs-ai-variant", response_model=ImageOut, status_code=201)

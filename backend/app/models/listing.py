@@ -107,6 +107,19 @@ class Listing(Base, TimestampMixin):
     # `deferred=True`: no async, o carregamento tardio estoura MissingGreenlet
     # na serializacao. Objeto ainda nao carregado do banco (criado e nao
     # `flush`+`refresh`) tem o atributo None.
+    #
+    # `expire_on_flush=False` (2026-09-12): por padrao o SQLAlchemy EXPIRA uma
+    # column_property de expressao em todo flush em que o objeto esta sujo.
+    # Todo endpoint de acao (start, approve, publish...) altera o listing e
+    # commita antes de serializar `ListingSummary` — e a serializacao tentava
+    # recarregar o atributo no contexto async: `MissingGreenlet`, 500 SEM
+    # cabecalho CORS, com a transacao ja commitada (o anuncio andava, o
+    # operador via falha). Em producao desde c2bc490. Com isto, o valor
+    # carregado sobrevive ao flush e serializar nunca estoura. O valor
+    # CERTO depois de uma acao que muda a contagem (aprovar, promover) vem
+    # de `ListingService.summary_after_commit`, que faz `refresh` antes de
+    # serializar — e' o unico caminho dos endpoints de acao (teste por AST em
+    # tests/test_serializacao_pos_commit.py).
     approved_image_count: Mapped[int] = column_property(
         select(func.count(ListingImage.id))
         .where(
@@ -115,5 +128,6 @@ class Listing(Base, TimestampMixin):
             ListingImage.sort_order < CANDIDATE_SORT_ORDER_FLOOR,
         )
         .correlate_except(ListingImage)
-        .scalar_subquery()
+        .scalar_subquery(),
+        expire_on_flush=False,
     )
