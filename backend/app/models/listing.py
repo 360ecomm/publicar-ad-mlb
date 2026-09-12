@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Optional
 from uuid import uuid4
-from sqlalchemy import ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
@@ -32,6 +32,11 @@ LISTING_STATUSES: tuple[str, ...] = (
 
 class Listing(Base, TimestampMixin):
     __tablename__ = "listings"
+    __table_args__ = (
+        # Fila de trabalho: filtro por seller + status, ordenado por created_at
+        # desc. Ver migration d4e8b2a6f9c1 para o porque de UM composto.
+        Index("ix_listings_seller_status_created", "seller_id", "status", text("created_at DESC")),
+    )
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     seller_id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sellers.id"), nullable=False)
