@@ -769,3 +769,4 @@ Esses dados devem estar no catálogo de produtos antes do pipeline de batch.
 | specs/SPEC-009-security.md | Modelo de segurança |
 | docs/superpowers/specs/esquema-5-posicoes.md | Esquema de 5 posições (padrão único de imagens) |
 | docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md | Entrega no bucket do seller: ideia pausada e como retomar |
+| docs/superpowers/specs/frontend-fluxo-operador.md | Fluxo do operador: desenho do frontend (bloco B), aprovado em 2026-09-11 — fila de trabalho, revisão de imagens por posição, atributos por `is_editable`, ordem de construção e pendências |
