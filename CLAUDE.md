@@ -631,11 +631,32 @@ GET    /api/v1/system/pending-raw-photos                 contagem/lista dos list
 POST   /api/v1/listings/{id}/pipeline/resume_ai_engine   retomada manual de pending_ai_engine (motor OpenAI fora / crédito)
 GET    /api/v1/system/pending-ai-engine                  contagem/lista dos listings do seller em pending_ai_engine
 
+POST   /api/v1/listings/bulk/start-pipeline              em massa: draft → generating_title (fila: "Iniciar pipeline")
+POST   /api/v1/listings/bulk/approve-titles              em massa: pending_title_approval → predicting_category (fila: "Aprovar títulos")
+POST   /api/v1/listings/bulk/reject-titles               em massa: pending_title_approval → generating_title de novo (fila: "Reprovar títulos")
+POST   /api/v1/listings/bulk/generate-images             em massa: pending_description → generating_images (fila: "Gerar imagens")
+POST   /api/v1/listings/bulk/approve-images              em massa: aprova por posição (sort_order < 90 e ml_picture_id) → generating_description (fila: "Aprovar imagens")
+POST   /api/v1/listings/bulk/publish                     em massa: ready_to_publish → publishing (fila: "Publicar", com confirmação)
+PUT    /api/v1/listings/bulk/attribute                   preenche um atributo em vários anúncios (grade /listings/attributes)
+GET    /api/v1/listings/bulk/attributes                  linhas da grade de atributos em massa
+
+GET    /api/v1/health                                    sem auth: status do banco e do redis
+GET    /api/v1/dashboard                                 painel de contas (/): um item por seller com contagem por status
+GET    /api/v1/sellers                                   contas ML que o usuário acessa
+GET    /api/v1/sellers/image-config                      raw_base_url do seller ativo (bucket público de fotos brutas)
+PUT    /api/v1/sellers/image-config                      cria/atualiza a raw_base_url
+GET    /api/v1/title-configs                             regras de título por grupo de produto do seller
+POST   /api/v1/title-configs                             cria regra
+PUT    /api/v1/title-configs/{config_id}                 atualiza regra
+DELETE /api/v1/title-configs/{config_id}                 remove regra
+
 POST   /api/v1/listings/{id}/images/cover-ai-variant     candidato cover_ai (sort_order 90)
 POST   /api/v1/listings/{id}/images/specs-ai-variant     candidato specs_ai (sort_order 91)
 POST   /api/v1/listings/{id}/images/{img}/promote-cover  quem ocupa sort_order 0
 POST   /api/v1/listings/{id}/images/{img}/promote-specs  quem ocupa o slot de ficha
 ```
+
+> **Todo `/listings/bulk/*` devolve `BulkResult`** (`processed`, `failed`, `results[{listing_id, success, error}]`) e recusa item fora do status esperado com `"estado inválido"`, sem derrubar os outros. A fila deriva as ações do status dos selecionados e mostra o motivo por SKU; erro técnico (`SQL`, `Traceback`, `sqlalchemy`, texto longo) nunca chega cru à tela.
 
 > **`promote_specs` NÃO tem posição fixa, `promote_cover` tem.** A capa é 0 por
 > invariante do domínio (`COVER_SORT_ORDER`). A ficha não: `card_specs` nasce em
