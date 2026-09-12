@@ -7,6 +7,7 @@ import type {
   BulkResult,
   ListingAttributesRow,
   StatusCounts,
+  RawPhotosOut,
 } from "@/types/listing"
 
 export interface CreateListingPayload {
@@ -60,6 +61,15 @@ export async function getListings(
 /** Contagem por status do seller ativo, direto do banco (nunca do que está carregado). */
 export async function getStatusCounts(): Promise<StatusCounts> {
   return apiFetch<StatusCounts>("/api/v1/listings/status-counts")
+}
+
+/**
+ * URLs das fotos brutas do anúncio (botão "ver original" da revisão), sob
+ * demanda. O servidor resolve o que existe no bucket público; quem carrega a
+ * imagem é o navegador. Lista vazia não é erro.
+ */
+export async function getRawPhotos(id: string): Promise<RawPhotosOut> {
+  return apiFetch<RawPhotosOut>(`/api/v1/listings/${id}/raw-photos`)
 }
 
 export async function getListing(id: string): Promise<ListingDetail> {

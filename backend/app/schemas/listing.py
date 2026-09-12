@@ -67,6 +67,22 @@ class ListingSummary(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RawPhotoGroup(BaseModel):
+    """Fotos brutas de UM SKU do anuncio, em ordem (`{sku}-1`, `-2`...)."""
+    sku: str
+    urls: list[str]
+
+
+class RawPhotosOut(BaseModel):
+    """`GET /listings/{id}/raw-photos`. Agrupado por SKU porque
+    `resolve_listing_skus` pode devolver mais de um (kit): a tela mostra o
+    original certo ao lado de cada componente. `configured=False` = seller sem
+    `raw_base_url`, e `groups` vazio; SKU sem foto vem como grupo com `urls`
+    vazio. Os dois sao informacao, nao erro (sempre 200)."""
+    configured: bool
+    groups: list[RawPhotoGroup]
+
+
 class ListingPage(BaseModel):
     items: list[ListingSummary]
     total: int

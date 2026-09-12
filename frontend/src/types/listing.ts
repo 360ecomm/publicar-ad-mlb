@@ -115,6 +115,22 @@ export interface StatusCounts {
   total: number
 }
 
+/** Fotos brutas de UM SKU do anúncio, em ordem ({sku}-1, -2...). */
+export interface RawPhotoGroup {
+  sku: string
+  urls: string[]
+}
+
+/**
+ * GET /listings/{id}/raw-photos. Agrupado por SKU (um anúncio pode virar
+ * kit). `configured=false` = seller sem bucket de fotos brutas (groups vazio);
+ * SKU sem foto vem como grupo com `urls` vazio. Nenhum dos dois é erro.
+ */
+export interface RawPhotosOut {
+  configured: boolean
+  groups: RawPhotoGroup[]
+}
+
 export const STATUS_LABELS: Record<ListingStatus, string> = {
   draft: "Rascunho",
   generating_title: "Gerando título",

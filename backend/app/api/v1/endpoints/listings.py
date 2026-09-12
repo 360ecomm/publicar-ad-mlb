@@ -19,10 +19,13 @@ from app.schemas.listing import (
     ListingPage,
     ListingStatusCounts,
     ListingSummary,
+    RawPhotoGroup,
+    RawPhotosOut,
 )
 from app.schemas.attribute import AttributesSubmitRequest
 from app.services.listing_service import ListingService
 from app.services.publish_service import PublishService
+from app.services.seller_image_config_service import SellerImageConfigService
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -131,6 +134,39 @@ async def get_listing(
 ):
     listing = await ListingService(db).get_or_404(listing_id, active_seller.id)
     return await _load_detail(db, listing)
+
+
+@router.get("/{listing_id}/raw-photos", response_model=RawPhotosOut)
+async def listing_raw_photos(
+    listing_id: UUID,
+    active_seller=Depends(get_active_seller),
+    db: AsyncSession = Depends(get_db),
+):
+    """URLs das fotos brutas do anuncio, para o botao "ver original" da tela
+    de revisao (sob demanda: a maioria das revisoes nao precisa do original).
+    Devolve URL, nunca bytes — o bucket e' publico e o navegador busca direto;
+    o servidor so resolve o que existe, porque a sondagem `{sku}-1`, `-2`...
+    x extensoes feita do navegador seria N x 3 requisicoes e barreira de CORS.
+
+    Pior caso por SKU: `RAW_PHOTOS_MAX` x `len(RAW_PHOTO_EXTENSIONS)`
+    requisicoes ao bucket (ver `discover_raw_photo_urls`, que documenta os
+    limites da descoberta por sondagem e a alternativa via API S3 do R2).
+    Seller sem `raw_base_url` ou SKU sem foto: 200 com lista vazia, nao erro.
+    Anuncio de outro seller: 404, como nos demais endpoints."""
+    from app.services.seller_image_source_service import (
+        discover_raw_photo_urls,
+        resolve_listing_skus,
+    )
+
+    listing = await ListingService(db).get_or_404(listing_id, active_seller.id)
+    config = await SellerImageConfigService(db, active_seller.id).get()
+    if config is None or not config.raw_base_url:
+        return RawPhotosOut(configured=False, groups=[])
+    groups = [
+        RawPhotoGroup(sku=sku, urls=await discover_raw_photo_urls(config.raw_base_url, sku))
+        for sku in await resolve_listing_skus(listing)
+    ]
+    return RawPhotosOut(configured=True, groups=groups)
 
 
 @router.delete("/{listing_id}", status_code=204)
