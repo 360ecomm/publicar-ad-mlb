@@ -453,9 +453,12 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_ml_replace_pictures.py` — substituição TOTAL de fotos: recusa lista vazia, ID repetido e perda de `must_keep`
 - `test_bulk_approve_por_posicao.py` — Postgres real (só com `TEST_DATABASE_URL`): `bulk_approve_images` aprova as 5 posições (0–4, inclusive `cover_ai`/`specs_ai` oficiais e a `cover_deterministic` de fallback) e deixa as candidatas 90/91 `approved=False`; os 2 últimos cobrem a condição do `ml_picture_id` (posição reprovada no QA não é aprovada, nem quando há fallback) (4)
 - `test_recusa_aprovacao_vazia.py` — Postgres real (só com `TEST_DATABASE_URL`): aprovação que não aprova nada é recusada nos dois caminhos. Em massa: tudo reprovado no QA → item `success=False` com `"nenhuma imagem aprovável"`, zero eventos, status intacto, `generate_description` não disparado; lote misto (vazio primeiro) → o normal é aprovado e o vazio falha sem contaminá-lo. Individual: ids de outro anúncio → 422 **antes de qualquer escrita** (nenhuma imagem vira `rejected`); lista vazia continua 422 (4)
+- `test_status_counts_rota.py` — sem banco (sempre roda): `GET /listings/status-counts` declarada antes de `GET /{listing_id}` (ordem de rota do FastAPI) e `LISTING_STATUSES` com 16 chaves sem repetição (2)
+- `test_listagem_em_escala.py` — Postgres real (só com `TEST_DATABASE_URL`): `TestContagemPorStatus` — `count_by_status` agrega em UMA consulta e sempre devolve as 16 chaves, zero quando vazio, status legado aparece e entra no total (3); `TestFiltroPorVariosStatus` — `?status=` repetido junta os grupos, string única continua igual a hoje, lista vazia/None não filtra (6); `TestBusca` — `ilike` sobre SKU/título/marca/mlb_id, combinada com filtro de status, isolamento por seller (8); `TestPaginacao` — com filtro de status e com busca (2); `TestParametroStatusNaRota` — `status` repetido e `search` na rota real, `status-counts` não cai no path param (4) (23)
+- `test_migracao_indice_listagem.py` — migração `d4e8b2a6f9c1`: `TestIndiceListagemEmEscala` (Postgres real, só com `TEST_DATABASE_URL`) — downgrade remove/upgrade recria o índice composto, índice cobre `(seller_id, status, created_at DESC)` (2); `test_revisao_encadeia_no_head_atual` — sem banco, prova que a migração encadeia no head (1) (3)
 
-> Suíte completa: **455 passed, 21 skipped** sem `TEST_DATABASE_URL`; **476 passed** com ela (2026-09-11). Os pulados são os testes
-> com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, os de migração e a corrida real de
+> Suíte completa: **458 passed, 46 skipped** sem `TEST_DATABASE_URL`; **504 passed** com ela (2026-09-11). Os pulados são os testes
+> com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py` — e a corrida real de
 > `test_promocao_indice_unico.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
 > `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
@@ -475,7 +478,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `8e3a5c1d7f92` — remove o write-back por seller (RF7): `seller_image_configs.write_*`, `listing_images.r2_write_status` e `url_r2`. Ver `docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md`
 - `9f4c2b7e1d63` — kind `presentation` → `presentation_ai` em `listing_images` (só dados, sem mudança de schema)
 - `b3e7a1c9d5f2` — cria `listing_review_events` (FK de `listing_id` com `ON DELETE CASCADE`)
-- `c8d2f6a4e1b7` — drop de `listing_images.review_seconds` (o tempo de revisão vive só no evento) (head atual)
+- `c8d2f6a4e1b7` — drop de `listing_images.review_seconds` (o tempo de revisão vive só no evento)
+- `d4e8b2a6f9c1` — índice composto `ix_listings_seller_status_created` (seller_id, status, created_at DESC) (head atual)
 
 ---
 
@@ -602,7 +606,8 @@ GET    /api/v1/import                      listar imports recentes
 GET    /api/v1/import/{id}                 detalhe de import com status por linha
 
 POST   /api/v1/listings                    criar anúncio (status: draft)
-GET    /api/v1/listings                    listar com paginação/filtro
+GET    /api/v1/listings                    listar com paginação/filtro; `status` repetível (`?status=a&status=b`) e `search`
+GET    /api/v1/listings/status-counts      contagem por status do seller (16 chaves, zeros incluídos) + total
 GET    /api/v1/listings/{id}               detalhe (com títulos, atributos, imagens, jobs)
 DELETE /api/v1/listings/{id}               excluir (só draft ou failed)
 POST   /api/v1/listings/{id}/pipeline/start
@@ -663,6 +668,10 @@ Rodar com `npm run dev` dentro de `frontend/`. Porta: `http://localhost:3000`
 - Topbar removida; título em cada página; seletor de seller no rodapé da sidebar
 - Transição suave entre páginas: `key={pathname}` com `animate-in fade-in duration-200`
 - Títulos em PT-BR sentence case
+
+> O quadro (`/`) ainda filtra por `?status=<um>`. A fila de trabalho (bloco B,
+> ainda não implementada) é quem vai consumir `status-counts` + `status`
+> repetido + `search`.
 
 **Arquivos frontend críticos:**
 - `src/components/layout/Sidebar.tsx` — sidebar com SellerSelector embutido
