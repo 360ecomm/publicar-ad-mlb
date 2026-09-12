@@ -1831,7 +1831,10 @@ git commit -m "feat(listings): POST /images/positions/{posicao}/regenerate cria 
 
 **Interfaces:**
 - Produces: `_mensagem_regeneracao_em_andamento(posicoes: list[int]) -> str` = `"Regeneração em andamento na posição {a, b}; aguarde a conclusão antes de aprovar."`
-- **Restrição de mock:** `tests/test_lote_para_em_ready_to_publish.py` responde qualquer consulta de `bulk_approve_images` após a primeira com um `MagicMock` (`rowcount = 1`). `MagicMock().scalars().all()` é um `MagicMock`, **verdadeiro** num `if`, mas **iterável vazio** (`__iter__` padrão devolve `iter([])`). Por isso a checagem em massa **itera** o resultado (`sorted(...)`) em vez de testar a veracidade. Em `approve_images` não há consulta nova: usa a lista `images` já carregada (`mock_img.status` é `MagicMock`, diferente de `"generating"`). Não "simplificar" isso.
+- **Restrições dos testes pré-existentes (não alterar nenhum):**
+  - `tests/test_bulk_service.py::test_bulk_approve_images_exclui_candidatas_por_posicao_nao_por_kind` fixa que o **2º statement** da sessão em `bulk_approve_images` é o `UPDATE listing_images` e que o SQL dele contém `listing_images.sort_order <` e `listing_images.ml_picture_id IS NOT NULL` e **não** contém `listing_images.kind`. Logo **não pode haver consulta nova antes do UPDATE**. A cerca entra **dentro** do UPDATE, como `NOT EXISTS` de placeholder `generating` do anúncio (subconsulta com `aliased(ListingImage)` para não correlacionar com a tabela do UPDATE), e a consulta que distingue "em regeneração" de "nenhuma imagem aprovável" só roda quando `rowcount == 0`. Efeito colateral bom: a cerca é atômica com a escrita.
+  - `tests/test_lote_para_em_ready_to_publish.py` responde qualquer consulta após a primeira com `MagicMock` (`rowcount = 1`), então nunca entra no ramo `rowcount == 0`. Mesmo assim, nesse ramo a checagem **itera** o resultado (`sorted(...)`): `MagicMock().scalars().all()` é verdadeiro num `if`, mas iterável vazio. Não trocar por `if r:`.
+  - Em `approve_images` não há consulta nova: usa a lista `images` já carregada (`mock_img.status` é `MagicMock`, diferente de `"generating"`).
 
 - [ ] **Step 1: Escrever os testes que falham (anexar ao arquivo da Task 5)**
 
@@ -1868,25 +1871,36 @@ class TestAprovacaoBloqueadaDuranteRegeneracao:
             await ListingService(db).approve_images(_listing(), [uuid.uuid4()], user_id=uuid.uuid4())
         assert "posição 0, 4;" in exc.value.detail
 
-    @pytest.mark.asyncio
-    async def test_bulk_approve_images_item_falho_com_mensagem_propria(self):
-        from app.services.listing_service import ListingService
-
-        listing = _listing()
-        db = AsyncMock(); chamadas = [0]
+    def _db_bulk(self, listing, rowcount, em_regeneracao):
+        """Statements de `bulk_approve_images`, na ordem: 1 SELECT Listing,
+        2 UPDATE (com a cerca NOT EXISTS dentro), 3 (so quando rowcount == 0)
+        SELECT das posicoes em regeneracao."""
+        db = AsyncMock(); statements = []
 
         async def execute_side(stmt):
-            chamadas[0] += 1
+            statements.append(stmt)
             r = MagicMock()
-            if chamadas[0] == 1:
+            if len(statements) == 1:
                 r.scalar_one_or_none = MagicMock(return_value=listing)
-            elif chamadas[0] == 2:   # consulta das posicoes em regeneracao
-                r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[3])))
+            elif len(statements) == 2:
+                r.rowcount = rowcount
             else:
-                raise AssertionError("o UPDATE nao pode rodar com regeneracao em andamento")
+                r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=list(em_regeneracao))))
             return r
 
         db.execute = execute_side; db.commit = AsyncMock(); db.add = MagicMock(); db.rollback = AsyncMock()
+        return db, statements
+
+    @pytest.mark.asyncio
+    async def test_bulk_approve_images_item_falho_com_mensagem_propria(self):
+        """A cerca vive DENTRO do UPDATE (NOT EXISTS placeholder generating):
+        com regeneracao em andamento o UPDATE aprova zero linhas, e a
+        consulta seguinte e' o que separa este caso de "nenhuma imagem
+        aprovavel"."""
+        from app.services.listing_service import ListingService
+
+        listing = _listing()
+        db, statements = self._db_bulk(listing, rowcount=0, em_regeneracao=[3])
         with patch("app.workers.tasks.ai_tasks.generate_description") as gen:
             result = await ListingService(db, listing.seller_id).bulk_approve_images(
                 [listing.id], user_id=uuid.uuid4())
@@ -1894,32 +1908,44 @@ class TestAprovacaoBloqueadaDuranteRegeneracao:
         assert result.processed == 0 and result.failed == 1
         assert result.results[0].error == "Regeneração em andamento na posição 3; aguarde a conclusão antes de aprovar."
         assert listing.status == "pending_image_approval"
-        db.commit.assert_not_awaited(); gen.delay.assert_not_called()
+        db.commit.assert_not_awaited(); db.rollback.assert_awaited(); gen.delay.assert_not_called()
+        assert len(statements) == 3
+        update_sql = str(statements[1])
+        assert update_sql.startswith("UPDATE listing_images"), update_sql
+        assert "NOT (EXISTS" in update_sql, update_sql
+        assert "listing_images_1.status" in update_sql, "subconsulta com alias, sem correlacionar com o UPDATE"
+        assert "listing_images.kind" not in update_sql
 
     @pytest.mark.asyncio
-    async def test_bulk_sem_regeneracao_segue_normal(self):
+    async def test_bulk_sem_nada_aprovavel_continua_com_a_mensagem_antiga(self):
         from app.services.listing_service import ListingService
 
         listing = _listing()
-        db = AsyncMock(); chamadas = [0]
+        db, statements = self._db_bulk(listing, rowcount=0, em_regeneracao=[])
+        with patch("app.workers.tasks.ai_tasks.generate_description") as gen:
+            result = await ListingService(db, listing.seller_id).bulk_approve_images(
+                [listing.id], user_id=uuid.uuid4())
+        assert result.failed == 1 and result.results[0].error == "nenhuma imagem aprovável"
+        assert len(statements) == 3 and listing.status == "pending_image_approval"
+        gen.delay.assert_not_called()
 
-        async def execute_side(stmt):
-            chamadas[0] += 1
-            r = MagicMock()
-            if chamadas[0] == 1:
-                r.scalar_one_or_none = MagicMock(return_value=listing)
-            elif chamadas[0] == 2:
-                r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-            else:
-                r.rowcount = 5
-            return r
+    @pytest.mark.asyncio
+    async def test_bulk_sem_regeneracao_segue_normal_com_o_update_em_segundo(self):
+        from app.services.listing_service import ListingService
 
-        db.execute = execute_side; db.commit = AsyncMock(); db.add = MagicMock(); db.rollback = AsyncMock()
+        listing = _listing()
+        db, statements = self._db_bulk(listing, rowcount=5, em_regeneracao=[])
         with patch("app.workers.tasks.ai_tasks.generate_description") as gen:
             result = await ListingService(db, listing.seller_id).bulk_approve_images(
                 [listing.id], user_id=uuid.uuid4())
         assert result.processed == 1 and listing.status == "generating_description"
         gen.delay.assert_called_once()
+        assert len(statements) == 2, "sem rowcount 0 nao ha consulta extra"
+        update_sql = str(statements[1])
+        assert "UPDATE listing_images" in update_sql
+        assert "listing_images.sort_order <" in update_sql
+        assert "listing_images.ml_picture_id IS NOT NULL" in update_sql
+        assert "listing_images.kind" not in update_sql
 
 
 def test_mensagem_de_regeneracao_em_andamento():
@@ -1963,30 +1989,62 @@ Em `approve_images`, logo depois de `images = result.scalars().all()` e **antes*
             )
 ```
 
-Em `bulk_approve_images`, logo depois do `continue` de `"estado inválido"` e **antes** do comentário que precede o `sa_update(ListingImage)`:
+Em `bulk_approve_images`, **sem consulta nova antes do UPDATE** (`test_bulk_service.py` fixa o UPDATE como 2º statement). Import no topo do arquivo: `from sqlalchemy.orm import aliased`. O bloco do UPDATE e do `rowcount == 0` passa a ser:
 
 ```python
                 # Mesmo bloqueio do individual, com item falho e mensagem
-                # propria em vez de derrubar o lote. `sorted(...)` ITERA o
-                # resultado de proposito (ver Task 6 do plano
-                # 2026-09-12-regenerar-posicao): nao trocar por `if r:`.
-                em_regeneracao = sorted(
-                    (
-                        await self.db.execute(
-                            select(ListingImage.sort_order).where(
-                                ListingImage.listing_id == lid,
-                                ListingImage.status == GENERATING_STATUS,
-                            )
-                        )
-                    ).scalars().all()
+                # propria em vez de derrubar o lote. A cerca vive DENTRO do
+                # UPDATE: `NOT EXISTS` de placeholder `generating` deste
+                # anuncio — atomica com a escrita (sem janela entre checar e
+                # aprovar) e sem statement novo antes do UPDATE, que
+                # `test_bulk_service` fixa como o 2o da sessao. `aliased` e'
+                # obrigatorio: sem ele o SQLAlchemy correlaciona a subconsulta
+                # com a propria tabela do UPDATE e a cerca passa a olhar so a
+                # linha corrente.
+                placeholder = aliased(ListingImage)
+                sem_regeneracao = ~(
+                    select(placeholder.id)
+                    .where(placeholder.listing_id == lid, placeholder.status == GENERATING_STATUS)
+                    .exists()
                 )
-                if em_regeneracao:
-                    results.append(BulkItemResult(
-                        listing_id=lid, success=False,
-                        error=_mensagem_regeneracao_em_andamento(em_regeneracao),
-                    ))
+                update_result = await self.db.execute(
+                    sa_update(ListingImage)
+                    .where(
+                        ListingImage.listing_id == lid,
+                        ListingImage.sort_order < CANDIDATE_SORT_ORDER_FLOOR,
+                        ListingImage.ml_picture_id.isnot(None),
+                        sem_regeneracao,
+                    )
+                    .values(approved=True)
+                    .execution_options(synchronize_session=False)
+                )
+                # Nada bateu o filtro: ou toda posicao reprovou no QA, ou ha
+                # regeneracao em andamento (a cerca zera o UPDATE). Rollback
+                # antes de seguir, e uma consulta separa os dois casos com a
+                # mensagem certa. `sorted(...)` ITERA o resultado de proposito
+                # (ver Task 6 do plano 2026-09-12-regenerar-posicao): nao
+                # trocar por `if r:`.
+                if update_result.rowcount == 0:
+                    await self.db.rollback()
+                    em_regeneracao = sorted(
+                        (
+                            await self.db.execute(
+                                select(ListingImage.sort_order).where(
+                                    ListingImage.listing_id == lid,
+                                    ListingImage.status == GENERATING_STATUS,
+                                )
+                            )
+                        ).scalars().all()
+                    )
+                    erro = (
+                        _mensagem_regeneracao_em_andamento(em_regeneracao)
+                        if em_regeneracao else "nenhuma imagem aprovável"
+                    )
+                    results.append(BulkItemResult(listing_id=lid, success=False, error=erro))
                     continue
 ```
+
+O comentário longo que hoje precede o `sa_update` (sobre candidatas por posição e `ml_picture_id IS NOT NULL`) e o que precede o `if update_result.rowcount == 0` são **mantidos** acima dos novos, não apagados.
 
 - [ ] **Step 4: Rodar e ver passar — inclusive os testes existentes das aprovações**
 
@@ -2262,6 +2320,48 @@ class TestRegeneracaoPontaAPonta:
             await engine.dispose()
 
     @pytest.mark.asyncio
+    async def test_worker_apaga_so_a_nao_aprovada_da_posicao(self):
+        """Segunda cerca do worker, provada no SQL real (a revisao da Task 4
+        apontou que o WHERE da consulta destrutiva so era exercido com mock):
+        com uma linha APROVADA e uma nao aprovada na mesma posicao — estado que
+        o endpoint recusa, mas o worker nao pode depender disso — mais uma
+        candidata em 90, so a nao aprovada sai. O placeholder e' semeado
+        direto, sem passar pelo service."""
+        from sqlalchemy import update
+
+        from app.models.listing_image import ListingImage
+
+        engine, sm = await _preparar_banco()
+        try:
+            listing_id, seller_id, _ = await _semear(sm, CINCO + [
+                ("benefits_ai", 2, None, "validation_failed"),
+                ("cover_ai", 90, "c90", "uploaded"),
+                ("benefits_ai", 2, None, "generating"),
+            ])
+            async with sm() as s:
+                await s.execute(update(ListingImage).where(
+                    ListingImage.listing_id == listing_id, ListingImage.ml_picture_id == "p2"
+                ).values(approved=True))
+                await s.commit()
+            linhas = await _linhas(sm, listing_id)
+            pid = next(r[0] for r in linhas if r[3] == "generating")
+            id_aprovada = next(r[0] for r in linhas if r[4] == "p2")
+            id_velha = next(r[0] for r in linhas if r[3] == "validation_failed")
+            id_candidata = next(r[0] for r in linhas if r[1] == 90)
+
+            result, _ = await _rodar_worker(sm, listing_id, pid, _Ambiente())
+
+            assert result["status"] == "uploaded" and result["removidas"] == 1
+            depois = await _linhas(sm, listing_id)
+            ids = {r[0] for r in depois}
+            assert id_aprovada in ids, "aprovada nunca e' apagada"
+            assert id_candidata in ids, "candidata em 90 nao e' desta posicao"
+            assert pid in ids and id_velha not in ids
+            assert next(r for r in depois if r[0] == id_aprovada)[5] is True
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
     async def test_aprovacao_que_venceu_a_corrida_faz_o_worker_desistir(self):
         """Placeholder criado, anuncio aprovado antes de o worker rodar
         (aprovacao em massa nao mexe no status da linha): o worker apaga o
@@ -2291,10 +2391,10 @@ class TestRegeneracaoPontaAPonta:
 - [ ] **Step 2: Rodar sem banco (deve pular) e com banco (deve passar)**
 
 Run: `docker compose exec -T backend pytest -q -p no:cacheprovider tests/test_regenerar_posicao_pg.py`
-Expected: `7 skipped`.
+Expected: `8 skipped`.
 
 Run: `docker exec publicaradmlb-backend-1 sh -c 'TEST_DATABASE_URL="${DATABASE_URL%/*}/publicar_test" pytest -q -p no:cacheprovider tests/test_regenerar_posicao_pg.py'`
-Expected: `7 passed`. Se algum falhar, corrigir o **código** (Tasks 3–6), nunca afrouxar o teste; se a falha for de um teste pré-existente, parar e reportar.
+Expected: `8 passed`. Se algum falhar, corrigir o **código** (Tasks 3–6), nunca afrouxar o teste; se a falha for de um teste pré-existente, parar e reportar.
 
 - [ ] **Step 3: Commit**
 
@@ -2326,7 +2426,7 @@ git commit -m "test(regenerar-posicao): ponta a ponta em Postgres real"
 - [ ] **Step 2: As duas linhas de base**
 
 Run: `docker compose exec -T backend pytest -q -p no:cacheprovider`
-Expected: `N passed, 63 skipped` com `N >= 482` e **0 failed** (56 pulados antigos + 7 novos de PG).
+Expected: `N passed, 68 skipped` com `N >= 482` e **0 failed** (56 pulados antigos + 4 da Task 2 + 8 da Task 7, todos de Postgres real).
 
 Run: `docker exec publicaradmlb-backend-1 sh -c 'TEST_DATABASE_URL="${DATABASE_URL%/*}/publicar_test" pytest -q -p no:cacheprovider'`
 Expected: `M passed` com `M >= 538`, **0 failed, 0 skipped** relevantes.
