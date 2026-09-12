@@ -199,3 +199,471 @@ class TestContagemPorStatus:
             assert sum(resultado.by_status.values()) == resultado.total
         finally:
             await engine.dispose()
+
+
+@_precisa_db
+class TestFiltroPorVariosStatus:
+    """`list_listings` ganha suporte a lista de status (Task 2): cada
+    agrupamento da fila junta 3 ou 4 status numa so consulta. O caso de um
+    unico status (str, como hoje) precisa continuar identico — e' o que o
+    quadro atual chama."""
+
+    async def _semear_seller_a(self, sm):
+        """Seller A: 2 failed, 2 ready_to_publish, 1 draft, 1 published (6
+        no total). Seller B nao entra aqui porque estes casos sao so sobre
+        o filtro de status, nao sobre isolamento multi-tenant (isso e'
+        coberto em TestBusca)."""
+        especificacao = [
+            ([{"status": "failed"}] * 2)
+            + ([{"status": "ready_to_publish"}] * 2)
+            + [{"status": "draft"}]
+            + [{"status": "published"}]
+        ]
+        user_id, (seller_a,) = await _semear(sm, [especificacao[0]])
+        return seller_a
+
+    @pytest.mark.asyncio
+    async def test_lista_de_dois_status_junta_os_dois_grupos(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a = await self._semear_seller_a(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, ["failed", "ready_to_publish"], 1, 20
+                )
+            assert pagina.total == 4, pagina.total
+            assert all(item.status in ("failed", "ready_to_publish") for item in pagina.items)
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_string_unica_continua_funcionando_como_hoje(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a = await self._semear_seller_a(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(seller_a, "failed", 1, 20)
+            assert pagina.total == 2, pagina.total
+            assert all(item.status == "failed" for item in pagina.items)
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_lista_de_um_elemento_e_igual_a_string(self):
+        """`["failed"]` (lista de 1) devolve os mesmos ids que `"failed"`
+        (str) — o parametro da rota vira lista quando repetido, mas o
+        comportamento de um so valor nao pode mudar."""
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a = await self._semear_seller_a(sm)
+            async with sm() as s:
+                svc = ListingService(s)
+                pagina_str = await svc.list_listings(seller_a, "failed", 1, 20)
+                pagina_lista = await svc.list_listings(seller_a, ["failed"], 1, 20)
+            assert pagina_lista.total == pagina_str.total == 2
+            assert {i.id for i in pagina_lista.items} == {i.id for i in pagina_str.items}
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_status_none_nao_filtra(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a = await self._semear_seller_a(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(seller_a, None, 1, 20)
+            assert pagina.total == 6, pagina.total
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_lista_vazia_nao_filtra(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a = await self._semear_seller_a(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(seller_a, [], 1, 20)
+            assert pagina.total == 6, pagina.total
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_status_inexistente_devolve_vazio_sem_erro(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a = await self._semear_seller_a(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(seller_a, ["nao_existe"], 1, 20)
+            assert pagina.total == 0, pagina.total
+            assert pagina.items == []
+        finally:
+            await engine.dispose()
+
+
+@_precisa_db
+class TestBusca:
+    """`search` casa por SKU, titulo, marca e MLB — mesmo padrao
+    (`ilike` + `or_`) de `ProductService.list_products`."""
+
+    async def _semear_ab(self, sm):
+        seller_a_listings = [
+            {
+                "status": "draft",
+                "sku": "SKU-ALFA",
+                "title": "Perfume Wepink Martin 100ml",
+                "brand": "Wepink",
+                "mlb_id": "MLB111",
+            },
+            {
+                "status": "failed",
+                "sku": "SKU-BETA",
+                "title": "Body Splash Fatal",
+                "brand": "Fatal",
+                "mlb_id": "MLB222",
+            },
+            {
+                "status": "draft",
+                "sku": "SKU-GAMA",
+                "title": None,
+                "brand": "Outra",
+                "mlb_id": None,
+            },
+        ]
+        seller_b_listings = [
+            {
+                "status": "draft",
+                "sku": "SKU-ALFA-B",
+                "title": "Perfume Wepink",
+                "brand": "Wepink",
+                "mlb_id": "MLB333",
+            },
+        ]
+        user_id, (seller_a, seller_b) = await _semear(
+            sm, [seller_a_listings, seller_b_listings]
+        )
+        return seller_a, seller_b
+
+    @pytest.mark.asyncio
+    async def test_busca_por_sku_case_insensitive_parcial_nao_vaza_outro_seller(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="alfa"
+                )
+            assert pagina.total == 1, pagina.total
+            assert pagina.items[0].sku_external_id == "SKU-ALFA"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_busca_por_titulo(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="martin"
+                )
+            assert pagina.total == 1, pagina.total
+            assert pagina.items[0].sku_external_id == "SKU-ALFA"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_busca_por_marca(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="fatal"
+                )
+            assert pagina.total == 1, pagina.total
+            assert pagina.items[0].sku_external_id == "SKU-BETA"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_busca_por_mlb_id(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="MLB222"
+                )
+            assert pagina.total == 1, pagina.total
+            assert pagina.items[0].sku_external_id == "SKU-BETA"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_busca_combina_com_filtro_de_status(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                svc = ListingService(s)
+                pagina_failed = await svc.list_listings(
+                    seller_a, ["failed"], 1, 20, search="wepink"
+                )
+                pagina_draft = await svc.list_listings(
+                    seller_a, ["draft"], 1, 20, search="wepink"
+                )
+            assert pagina_failed.total == 0, pagina_failed.total
+            assert pagina_draft.total == 1, pagina_draft.total
+            assert pagina_draft.items[0].sku_external_id == "SKU-ALFA"
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_busca_so_com_espacos_nao_filtra(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="   "
+                )
+            assert pagina.total == 3, pagina.total
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_busca_sem_resultado(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="zzz"
+                )
+            assert pagina.total == 0, pagina.total
+            assert pagina.items == []
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_nenhum_resultado_traz_id_de_outro_seller(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            seller_a, seller_b = await self._semear_ab(sm)
+            async with sm() as s:
+                # "wepink" casa em A (marca/titulo) e em B (marca/titulo);
+                # filtrando pelo seller A, nenhum item pode ter vindo de B.
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="wepink"
+                )
+            assert pagina.total == 1, pagina.total
+            assert pagina.items[0].sku_external_id == "SKU-ALFA"
+        finally:
+            await engine.dispose()
+
+
+@_precisa_db
+class TestPaginacao:
+    @pytest.mark.asyncio
+    async def test_paginacao_com_filtro_de_status(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            especificacao = [([{"status": "failed"}] * 5) + ([{"status": "draft"}] * 3)]
+            user_id, (seller_a,) = await _semear(sm, especificacao)
+
+            async with sm() as s:
+                svc = ListingService(s)
+                pagina_1 = await svc.list_listings(seller_a, ["failed"], 1, 2, search=None)
+                pagina_3 = await svc.list_listings(seller_a, ["failed"], 3, 2, search=None)
+                pagina_50 = await svc.list_listings(seller_a, ["failed"], 50, 2, search=None)
+
+            assert len(pagina_1.items) == 2
+            assert pagina_1.total == 5
+            assert pagina_1.page == 1
+            assert pagina_1.page_size == 2
+
+            assert len(pagina_3.items) == 1
+            assert pagina_3.total == 5
+
+            assert pagina_50.items == []
+            assert pagina_50.total == 5
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_paginacao_com_busca(self):
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            especificacao = [
+                [{"status": "failed", "title": "Perfume Wepink"}]
+                + [{"status": "failed", "title": "Perfume Outra Marca"}]
+                + [{"status": "failed", "title": t} for t in ("A", "B", "C")]
+            ]
+            user_id, (seller_a,) = await _semear(sm, especificacao)
+
+            async with sm() as s:
+                pagina = await ListingService(s).list_listings(
+                    seller_a, None, 1, 20, search="perfume"
+                )
+            assert pagina.total == 2, pagina.total
+        finally:
+            await engine.dispose()
+
+
+@_precisa_db
+class TestParametroStatusNaRota:
+    """HTTP de verdade via ASGITransport: prova que o parametro `status`
+    repetido chega como lista no endpoint e que a rota `/status-counts`
+    continua casando antes de `/{listing_id}`."""
+
+    async def _preparar_app(self, sm, seller_id):
+        from types import SimpleNamespace
+
+        from app.core.dependencies import get_active_seller, get_db
+        from app.main import app
+
+        async def _override_get_db():
+            async with sm() as session:
+                yield session
+
+        async def _override_get_active_seller():
+            return SimpleNamespace(id=seller_id)
+
+        app.dependency_overrides[get_db] = _override_get_db
+        app.dependency_overrides[get_active_seller] = _override_get_active_seller
+
+    @pytest.mark.asyncio
+    async def test_get_com_dois_status_repetidos(self):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import app
+
+        engine, sm = await _preparar_banco()
+        try:
+            especificacao = [
+                ([{"status": "failed"}] * 2) + ([{"status": "ready_to_publish"}] * 1)
+            ]
+            user_id, (seller_a,) = await _semear(sm, especificacao)
+            await self._preparar_app(sm, seller_a)
+            try:
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.get(
+                        "/api/v1/listings",
+                        params=[("status", "failed"), ("status", "ready_to_publish")],
+                    )
+                assert resp.status_code == 200, resp.text
+                assert resp.json()["total"] == 3, resp.json()
+            finally:
+                app.dependency_overrides.clear()
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_get_com_um_status_igual_a_hoje(self):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import app
+
+        engine, sm = await _preparar_banco()
+        try:
+            especificacao = [
+                ([{"status": "failed"}] * 2) + ([{"status": "ready_to_publish"}] * 1)
+            ]
+            user_id, (seller_a,) = await _semear(sm, especificacao)
+            await self._preparar_app(sm, seller_a)
+            try:
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.get("/api/v1/listings", params={"status": "failed"})
+                assert resp.status_code == 200, resp.text
+                assert resp.json()["total"] == 2, resp.json()
+            finally:
+                app.dependency_overrides.clear()
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_get_com_search(self):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import app
+
+        engine, sm = await _preparar_banco()
+        try:
+            especificacao = [[{"status": "draft", "sku": "SKU-ALFA"}]]
+            user_id, (seller_a,) = await _semear(sm, especificacao)
+            await self._preparar_app(sm, seller_a)
+            try:
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.get("/api/v1/listings", params={"search": "alfa"})
+                assert resp.status_code == 200, resp.text
+                assert resp.json()["total"] == 1, resp.json()
+            finally:
+                app.dependency_overrides.clear()
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_status_counts_nao_cai_no_path_param(self):
+        """Prova que a ordem de declaracao das rotas continua correta: sem
+        isso, "status-counts" seria interpretado como {listing_id} e
+        devolveria 422 em vez do resumo."""
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import app
+
+        engine, sm = await _preparar_banco()
+        try:
+            especificacao = [[{"status": "draft"}]]
+            user_id, (seller_a,) = await _semear(sm, especificacao)
+            await self._preparar_app(sm, seller_a)
+            try:
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    resp = await client.get("/api/v1/listings/status-counts")
+                assert resp.status_code == 200, resp.text
+                data = resp.json()
+                assert "by_status" in data
+                assert "total" in data
+            finally:
+                app.dependency_overrides.clear()
+        finally:
+            await engine.dispose()

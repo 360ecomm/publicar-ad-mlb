@@ -1,7 +1,7 @@
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, or_
 from sqlalchemy import update as sa_update, delete as sa_delete
 from app.models.listing import LISTING_STATUSES, Listing
 from app.models.listing_title import ListingTitle
@@ -54,13 +54,34 @@ class ListingService:
     async def list_listings(
         self,
         seller_id: UUID,
-        filter_status: str | None,
+        filter_status: str | list[str] | None,
         page: int,
         page_size: int,
+        search: str | None = None,
     ) -> ListingPage:
         query = select(Listing).where(Listing.seller_id == seller_id)
-        if filter_status:
-            query = query.where(Listing.status == filter_status)
+
+        # Aceita o parametro unico de hoje (str) e a lista da fila (cada
+        # agrupamento junta 3 ou 4 status). Vazios ("" ou lista vazia) nao
+        # filtram — mesmo comportamento do `if filter_status` antigo.
+        if isinstance(filter_status, str):
+            filter_status = [filter_status]
+        statuses = [s for s in (filter_status or []) if s]
+        if statuses:
+            query = query.where(Listing.status.in_(statuses))
+
+        # Mesmo padrao de `ProductService.list_products`: ilike + or_.
+        term = (search or "").strip()
+        if term:
+            like = f"%{term}%"
+            query = query.where(
+                or_(
+                    Listing.sku_external_id.ilike(like),
+                    Listing.selected_title.ilike(like),
+                    Listing.sku_brand.ilike(like),
+                    Listing.mlb_id.ilike(like),
+                )
+            )
 
         count_result = await self.db.execute(
             select(func.count()).select_from(query.subquery())
