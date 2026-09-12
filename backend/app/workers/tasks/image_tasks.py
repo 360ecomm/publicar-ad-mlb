@@ -608,3 +608,195 @@ async def _gerar_cinco_posicoes(db, listing, access_token, profile, fotos, sku) 
     await db.commit()
     logger.info("cinco_posicoes listing_id=%s sku=%s salvas=%s", listing.id, sku, salvas)
     return salvas
+
+
+# ---------------------------------------------------------------------------
+# Regeneracao de UMA posicao (spec docs/superpowers/specs/2026-09-12-regenerar-posicao.md).
+#
+# O anuncio fica em `pending_image_approval` o tempo todo: este worker NUNCA
+# escreve `listing.status` nem `listing.error_message`. `generating_images`
+# reativaria o guard de `_generate_images_async`; `pending_ai_engine` /
+# `pending_raw_photos` sao retomados pelo beat com a geracao COMPLETA (5
+# chamadas). Falha aqui e' falha da LINHA (placeholder), nao do anuncio.
+# ---------------------------------------------------------------------------
+
+async def _falhar_regeneracao(db, alvo, motivo: str) -> dict:
+    """Placeholder vira `generation_failed` com o motivo; a linha anterior da
+    posicao fica como estava."""
+    from app.models.listing_image import GENERATION_FAILED_STATUS
+
+    alvo.status = GENERATION_FAILED_STATUS
+    alvo.validation_error = motivo[:500]
+    await db.commit()
+    logger.warning(
+        "regen_posicao listing_id=%s posicao=%s image_id=%s result=generation_failed reason=%s",
+        alvo.listing_id, alvo.sort_order, alvo.id, motivo,
+    )
+    return {
+        "listing_id": str(alvo.listing_id), "image_id": str(alvo.id),
+        "posicao": alvo.sort_order, "status": GENERATION_FAILED_STATUS,
+    }
+
+
+async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
+    from sqlalchemy import select
+
+    from app.database import worker_session
+    from app.models.listing import Listing
+    from app.models.listing_image import GENERATING_STATUS, ListingImage
+    from app.models.seller import Seller
+    from app.services.ai.cost_log import (
+        IMAGE_EDIT_TASK_REGEN,
+        set_cost_context,
+        set_image_edit_task,
+    )
+    from app.services.image_engines.base import ImageEngineUnavailableError
+    from app.services.image_position_profiles import profile_for_category
+
+    async with worker_session() as db:
+        # 1) O placeholder e' o guard de idempotencia: retry ou dispatch duplo
+        # encontra `status != generating` e desiste antes de gastar.
+        alvo = (
+            await db.execute(
+                select(ListingImage).where(
+                    ListingImage.id == image_id, ListingImage.listing_id == listing_id
+                )
+            )
+        ).scalar_one_or_none()
+        if alvo is None or alvo.status != GENERATING_STATUS:
+            return {"listing_id": listing_id, "image_id": image_id, "skipped": True}
+
+        # 2) Aprovacao venceu a corrida entre o endpoint e este worker: o
+        # placeholder sai e nada e' gerado (o anuncio ja seguiu).
+        listing = (
+            await db.execute(select(Listing).where(Listing.id == listing_id))
+        ).scalar_one()
+        if listing.status != "pending_image_approval":
+            await db.delete(alvo)
+            await db.commit()
+            return {
+                "listing_id": listing_id, "image_id": image_id, "skipped": True,
+                "reason": f"status={listing.status}",
+            }
+
+        posicao = alvo.sort_order
+        set_cost_context(listing_id=listing.id, sku=listing.sku_external_id)
+        set_image_edit_task(IMAGE_EDIT_TASK_REGEN)
+
+        # 3) Quem ocupava a posicao ANTES de comecar: so estas podem ser
+        # apagadas no sucesso. Linhas criadas pela propria regeneracao (o
+        # fallback da capa, por exemplo) nunca entram aqui. Aprovada nao entra:
+        # o endpoint ja recusou a posicao aprovada, e o filtro e' a segunda
+        # cerca.
+        anteriores = (
+            await db.execute(
+                select(ListingImage).where(
+                    ListingImage.listing_id == listing.id,
+                    ListingImage.sort_order == posicao,
+                    ListingImage.id != alvo.id,
+                    ListingImage.approved.is_(False),
+                )
+            )
+        ).scalars().all()
+        anteriores_info = [(a.id, a.status, a.asset_key) for a in anteriores]
+
+        # 4) Token e fotos brutas (relidas do bucket: foto trocada entra).
+        seller = (
+            await db.execute(select(Seller).where(Seller.id == listing.seller_id))
+        ).scalar_one()
+        access_token = await _fetch_upload_token(seller, db)
+
+        carregado = await _carregar_fotos_brutas(db, listing)
+        if carregado is None:
+            return await _falhar_regeneracao(
+                db, alvo, "fotos brutas do SKU não encontradas no bucket do seller"
+            )
+        fotos, sku = carregado
+        profile = profile_for_category(listing.ml_category_id)
+
+        try:
+            ctx = await _montar_contexto(
+                db, listing, access_token, profile, fotos, sku,
+                com_campos=posicao in (1, 2, 4), com_copy=(posicao == 2),
+            )
+            subiu = await _gerar_posicao(db, listing, ctx, posicao, alvo=alvo)
+        except ImageEngineUnavailableError as exc:
+            # Motor fora: NAO e' standby do anuncio (o beat retomaria as 5).
+            # Rollback descarta o que esta tentativa tenha tocado; recarrega o
+            # placeholder porque o rollback expira os objetos.
+            await db.rollback()
+            alvo = (
+                await db.execute(select(ListingImage).where(ListingImage.id == image_id))
+            ).scalar_one()
+            return await _falhar_regeneracao(db, alvo, f"Motor de imagem indisponível: {exc}")
+
+        if not subiu:
+            if alvo.status == GENERATING_STATUS:
+                # Nem IA nem fallback produziram nada.
+                return await _falhar_regeneracao(
+                    db, alvo, "o motor de imagem não produziu imagem válida para esta posição"
+                )
+            # IA produziu, QA reprovou: o placeholder virou `validation_failed`
+            # com os bytes no R2 — evidencia para o humano. Nao foi sucesso:
+            # a anterior fica.
+            await db.commit()
+            logger.warning(
+                "regen_posicao listing_id=%s posicao=%s image_id=%s result=%s anteriores_mantidas=%s",
+                listing.id, posicao, alvo.id, alvo.status, len(anteriores_info),
+            )
+            return {
+                "listing_id": listing_id, "image_id": image_id,
+                "posicao": posicao, "status": alvo.status, "removidas": 0,
+            }
+
+        # 5) Sucesso: a nova subiu ao ML. As anteriores nao aprovadas saem, com
+        # o asset_key de cada uma no log (o objeto no R2 continua la).
+        for a in anteriores:
+            await db.delete(a)
+        await db.commit()
+        for (aid, astatus, akey) in anteriores_info:
+            logger.info(
+                "regen_posicao listing_id=%s posicao=%s apagada id=%s status=%s asset_key=%s",
+                listing.id, posicao, aid, astatus, akey,
+            )
+        logger.info(
+            "regen_posicao listing_id=%s sku=%s posicao=%s image_id=%s kind=%s result=substituida removidas=%s",
+            listing.id, sku, posicao, alvo.id, alvo.kind, len(anteriores_info),
+        )
+        return {
+            "listing_id": listing_id, "image_id": image_id, "posicao": posicao,
+            "status": alvo.status, "kind": alvo.kind, "removidas": len(anteriores_info),
+        }
+
+
+async def _mark_regen_failed(image_id: str, error: str) -> None:
+    """Ultima tentativa do Celery estourou: o placeholder (se ainda
+    `generating`) vira `generation_failed`. Nunca toca no anuncio."""
+    try:
+        from sqlalchemy import select
+
+        from app.database import worker_session
+        from app.models.listing_image import GENERATING_STATUS, ListingImage
+
+        async with worker_session() as db:
+            alvo = (
+                await db.execute(select(ListingImage).where(ListingImage.id == image_id))
+            ).scalar_one_or_none()
+            if alvo is not None and alvo.status == GENERATING_STATUS:
+                await _falhar_regeneracao(db, alvo, error)
+    except Exception as mark_exc:
+        logger.error(
+            "Could not mark regeneration %s as failed (original error: %s): %s",
+            image_id, error, mark_exc,
+        )
+
+
+@celery_app.task(name="app.workers.tasks.image_tasks.regenerate_position", bind=True, max_retries=2)
+def regenerate_position(self, listing_id: str, image_id: str) -> dict:
+    try:
+        return asyncio.run(_regenerate_position_async(listing_id, image_id))
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            asyncio.run(_mark_regen_failed(image_id, str(exc)))
+            raise
+        raise self.retry(exc=exc, countdown=2 ** self.request.retries * 5)  # 5s, 10s
