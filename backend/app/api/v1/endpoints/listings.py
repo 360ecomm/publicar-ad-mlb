@@ -282,6 +282,31 @@ async def approve_images(
     return ListingSummary.model_validate(listing)
 
 
+@router.post(
+    "/{listing_id}/images/positions/{posicao}/regenerate",
+    response_model=ImageOut,
+    status_code=202,
+)
+async def regenerate_image_position(
+    listing_id: UUID,
+    posicao: int,
+    active_seller=Depends(get_active_seller),
+    db: AsyncSession = Depends(get_db),
+):
+    """Regenera UMA posição (0..4, = `sort_order`) do esquema de 5 posições.
+
+    Devolve 202 com o placeholder (`status="generating"`); a imagem chega
+    pela task e aparece em `GET /listings/{id}` com `status="uploaded"`,
+    `validation_failed` (QA) ou `generation_failed` (motor). 409 fora de
+    `pending_image_approval`, em posição aprovada ou com regeneração já em
+    andamento; 422 fora de 0..4. Ver `ListingService.regenerate_position`.
+    """
+    svc = ListingService(db)
+    listing = await svc.get_or_404(listing_id, active_seller.id)
+    placeholder = await svc.regenerate_position(listing, posicao)
+    return ImageOut.model_validate(placeholder)
+
+
 @router.post("/{listing_id}/pipeline/publish", response_model=ListingSummary)
 async def publish_listing(
     listing_id: UUID,

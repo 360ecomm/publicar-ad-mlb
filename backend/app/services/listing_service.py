@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func, or_
 from sqlalchemy import update as sa_update, delete as sa_delete
+from sqlalchemy.exc import IntegrityError
 from app.models.listing import LISTING_STATUSES, Listing
 from app.models.listing_title import ListingTitle
 from app.models.listing_attribute import ListingAttribute
@@ -10,6 +11,8 @@ from app.models.listing_description import ListingDescription
 from app.models.listing_image import (
     CANDIDATE_SORT_ORDER_FLOOR,
     COVER_SORT_ORDER,
+    GENERATING_STATUS,
+    POSITION_KINDS,
     PROMOTABLE_COVER_KINDS,
     ListingImage,
 )
@@ -349,6 +352,70 @@ class ListingService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Este anúncio acabou de ser retomado por outra ação; aguarde.",
             )
+
+    async def regenerate_position(self, listing: Listing, posicao: int) -> ListingImage:
+        """Regenera UMA posicao (0..4) do esquema de 5 posicoes.
+
+        Insere um placeholder `ListingImage(status="generating")` e faz
+        commit ANTES de enfileirar: o placeholder e' a trava contra duplo
+        clique (indice unico parcial `uq_listing_images_generating_slot`) e o
+        que a tela le como "gerando". So posicao NAO aprovada — imagem
+        aprovada nao e' substituida por tras do operador. So em
+        `pending_image_approval`; o anuncio nao muda de status (ver o
+        cabecalho da task em image_tasks.py). Spec:
+        docs/superpowers/specs/2026-09-12-regenerar-posicao.md.
+        """
+        if listing.status != "pending_image_approval":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Regeneração de imagem disponível apenas no status "
+                    f"'pending_image_approval' (atual: '{listing.status}')"
+                ),
+            )
+        if posicao not in POSITION_KINDS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Posição inválida: informe um número de 0 a 4",
+            )
+        ocupantes = (
+            await self.db.execute(
+                select(ListingImage).where(
+                    ListingImage.listing_id == listing.id,
+                    ListingImage.sort_order == posicao,
+                )
+            )
+        ).scalars().all()
+        if any(img.approved for img in ocupantes):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A posição {posicao} já está aprovada; imagem aprovada não é regenerada",
+            )
+
+        placeholder = ListingImage(
+            listing_id=listing.id,
+            status=GENERATING_STATUS,
+            approved=False,
+            sort_order=posicao,
+            kind=POSITION_KINDS[posicao],
+            source_sku=listing.sku_external_id,
+        )
+        self.db.add(placeholder)
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            # `uq_listing_images_generating_slot`: ja existe placeholder
+            # `generating` nesta posicao — outro clique venceu.
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Regeneração em andamento na posição {posicao}; aguarde.",
+            )
+        await self.db.refresh(placeholder)
+
+        from app.workers.tasks.image_tasks import regenerate_position
+        regenerate_position.delay(str(listing.id), str(placeholder.id))
+        return placeholder
 
     async def approve_images(
         self,
