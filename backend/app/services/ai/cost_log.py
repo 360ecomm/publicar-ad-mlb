@@ -25,6 +25,27 @@ logger = logging.getLogger("ai_cost")
 
 _ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar("ai_cost_ctx", default=None)
 
+# Rotulo `task=` que o MOTOR DE IMAGEM usa na linha `ai_cost`. E' uma
+# ContextVar separada de `_ctx`, de proposito: `cost_context()` e' contrato
+# (o dicionario exato e' fixado em teste) e o motor nao conhece a task Celery
+# que o chamou. O worker de regeneracao de UMA posicao fixa
+# `IMAGE_EDIT_TASK_REGEN` no inicio; o lote nao fixa nada e sai como sempre.
+IMAGE_EDIT_TASK_DEFAULT = "image_edit"
+IMAGE_EDIT_TASK_REGEN = "image_edit_regen"
+
+_image_edit_task: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "ai_cost_image_edit_task", default=None
+)
+
+
+def set_image_edit_task(task: str | None) -> None:
+    """Fixa o rotulo das proximas chamadas ao motor de imagem nesta task; None volta ao padrao."""
+    _image_edit_task.set(task)
+
+
+def image_edit_task() -> str:
+    return _image_edit_task.get() or IMAGE_EDIT_TASK_DEFAULT
+
 
 def set_cost_context(*, listing_id, sku) -> None:
     """Fixa o listing/SKU que as proximas chamadas de IA desta task devem carregar."""

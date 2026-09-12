@@ -2,7 +2,7 @@ import base64
 import httpx
 
 from app.config import get_settings
-from app.services.ai.cost_log import log_ai_cost
+from app.services.ai.cost_log import image_edit_task, log_ai_cost
 from app.services.image_engines.base import ImageEngineUnavailableError
 
 _OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits"
@@ -131,7 +131,7 @@ class OpenAIEditEngine:
         data_resp = body.get("data", [])
         usage = body.get("usage") or {}
         log_ai_cost(
-            provider="openai", task="image_edit", model=model,
+            provider="openai", task=image_edit_task(), model=model,
             images=len(data_resp), input_images=len(images),
             size=data["size"], quality=data["quality"],
             input_tokens=usage.get("input_tokens"),
