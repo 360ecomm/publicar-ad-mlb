@@ -374,13 +374,13 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `seller.py` — Seller (access_token_enc, refresh_token_enc, token_expires_at)
 - `user_seller_access.py` — UserSellerAccess (user_id, seller_id, role) — tabela N:N
 - `product.py` — Product (sku, description, brand, **model**, ean, ncm, fiscal, físico, custo)
-- `listing.py` — Listing (sku_external_id, sku_description, sku_brand, **sku_model**, price, status, ...)
-- `listing_title.py` — ListingTitle
+- `listing.py` — Listing (sku_external_id, sku_description, sku_brand, **sku_model**, price, status, ...) + **`approved_image_count`**, uma `column_property` com subconsulta correlata em `listing_images` (`approved` e `sort_order < CANDIDATE_SORT_ORDER_FLOOR`): sai na **mesma** consulta de qualquer `select(Listing)`, então a listagem de 200 continua em 2 statements e os endpoints que fazem `ListingSummary.model_validate(listing)` recebem o valor sem consulta a mais. **Não** usar `deferred=True`: no async o carregamento tardio estoura `MissingGreenlet` na serialização. Objeto `Listing(...)` criado em memória e nunca carregado tem o atributo `None` (testes com listing falso passam `approved_image_count=0`)
+- `listing_title.py` — ListingTitle + índice simples `ix_listing_titles_listing_id` (migração `f7b3e9c1d2a5`; lida por `listing_id` em 5 pontos)
 - `listing_attribute.py` — ListingAttribute (allowed_values JSONB, is_required, source, **`tags` JSONB** com o dicionário de tags do ML inteiro) + propriedade **`is_editable`** (`False` só com `hidden` ou `read_only`; `tags` nulo = editável, na dúvida mostrar; `fixed` fora da regra por decisão pendente) — a única definição, o frontend não reimplementa
-- `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order, kind, validation_error) + propriedade `is_candidate` (`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`), a única definição de candidata
+- `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order, kind, validation_error) + propriedade `is_candidate` (`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`), a única definição de candidata. Três índices em `listing_id`: os dois **parciais** de slot (`uq_listing_images_cover_slot`, `uq_listing_images_specs_slot`, únicos, com `WHERE` de capa/ficha aprovada) e, desde `f7b3e9c1d2a5`, o **simples** `ix_listing_images_listing_id`, que coexiste com eles e cobre o que eles não cobrem: "todas as imagens deste anúncio" (a subconsulta de `approved_image_count` fazia Seq Scan por linha da listagem sem ele: 153 ms → 1,2 ms na página de 200)
 - `listing_review_event.py` — ListingReviewEvent (listing_id, user_id, action, mode, approved_count, review_seconds, created_at) — 1 linha por aprovação humana de imagens, imutável (sem `updated_at`). Apaga junto com o listing (FK `ON DELETE CASCADE` + `cascade="all, delete-orphan"` em `Listing.review_events`); `user_id` não cascateia
 - `listing_description.py` — ListingDescription
-- `listing_job.py` — ListingJob
+- `listing_job.py` — ListingJob + índice simples `ix_listing_jobs_listing_id` (migração `f7b3e9c1d2a5`; lida só no detalhe, mas a tabela só cresce, recebe INSERT num único ponto e o detalhe é a tela mais aberta)
 - `product_image.py` — ProductImage (seller_id, sku, ml_picture_id, is_approved) — índice SKU→imagem. **Sem escrita nem leitura desde 2026-09-10**; fica como registro histórico dos SKUs 37/38 até decisão de apagar
 - `batch_import.py` — BatchImport + BatchImportRow
 
