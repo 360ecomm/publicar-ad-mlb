@@ -85,6 +85,29 @@ PROMOTABLE_SPECS_KINDS = frozenset({CARD_SPECS_KIND, SPECS_AI_KIND})
 # tanto a linha reprovada quanto o fallback que a substituiu.
 CANDIDATE_SORT_ORDER_FLOOR = 90
 
+# --------------------------------------------------------------------------
+# Regeneracao de UMA posicao (spec docs/superpowers/specs/2026-09-12-regenerar-posicao.md).
+# --------------------------------------------------------------------------
+# Placeholder inserido pelo endpoint ANTES de enfileirar a task. E' a trava
+# contra duplo clique (indice unico parcial `uq_listing_images_generating_slot`
+# em `__table_args__`) e o que a tela le para mostrar "gerando". Era o
+# default da coluna `status` e nenhum caminho o gravava.
+GENERATING_STATUS = "generating"
+# Regeneracao que NAO produziu imagem (motor falhou, fotos brutas ausentes).
+# Distinto de `validation_failed` (imagem saiu e reprovou no QA) e de
+# `failed` (exclusivo de `Listing.status`). Motivo em `validation_error`.
+GENERATION_FAILED_STATUS = "generation_failed"
+# Kind oficial de cada posicao do esquema de 5 posicoes, pela posicao
+# (`sort_order`). Unica definicao: o worker gera com estes kinds e o
+# endpoint de regeneracao cria o placeholder com o kind da posicao pedida.
+POSITION_KINDS: dict[int, str] = {
+    0: COVER_AI_KIND,
+    1: "presentation_ai",
+    2: "benefits_ai",
+    3: "detail_ai",
+    4: SPECS_AI_KIND,
+}
+
 
 class ListingImage(Base):
     __tablename__ = "listing_images"
@@ -122,6 +145,17 @@ class ListingImage(Base):
         # sem ele, a subconsulta de `Listing.approved_image_count` fazia Seq
         # Scan por linha da listagem (153 ms -> 1,2 ms na pagina de 200).
         Index("ix_listing_images_listing_id", "listing_id"),
+        # Trava da regeneracao de UMA posicao (migration a1d7c3e9f5b2): no
+        # maximo UM placeholder `generating` por (anuncio, posicao). O segundo
+        # clique falha no commit e `ListingService.regenerate_position`
+        # devolve 409. Predicado literal, identico ao da migration.
+        Index(
+            "uq_listing_images_generating_slot",
+            "listing_id",
+            "sort_order",
+            unique=True,
+            postgresql_where=text("status = 'generating'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
