@@ -42,6 +42,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | SKU 38 | ✅ | 2º anúncio real: `MLB7574387170` (Body Splash Fatal Black For Her 200ml). Publicado com 8 fotos e depois trocado para as 5 do esquema novo |
 | Robustez do lote (2026-09-10) | ✅ | Lote validado ponta a ponta (T38 e SKU 45 real). Correções: `EMPTY_GTIN_REASON` condicional, título/copy/descrição sem thinking, prefill pelo `domain_discovery`, título preserva tipo de produto, placeholder "Sem marca", `PERFIL_PADRAO` universal (caminho antigo e reuso removidos), standbys `pending_raw_photos` e `pending_ai_engine` com beat, índices únicos dos slots, log `ai_cost`, `gemini-3.8-flash` fixo, fotos brutas jpg/png/webp, write-back no R2 (`asset_key`, sem blob no banco), write-back por seller removido |
 | Rodada 2026-09-11 | ✅ | Lote **para em `ready_to_publish`** depois da aprovação humana (auto-publish removido); `bulk/approve-images` aprova por **posição** (`sort_order < 90` e `ml_picture_id`), não por kind; kind `presentation` → `presentation_ai` (migração de dados); `ImageOut` expõe `kind`/`is_candidate`/`validation_error`; **`listing_review_events`**: 1 evento por aprovação humana, na mesma transação, FK com `ON DELETE CASCADE`; `listing_images.review_seconds` removida; **aprovação que não aprova nada é recusada** nos dois caminhos (individual: 422 antes de qualquer escrita; massa: item falho com `"nenhuma imagem aprovável"`), sem evento, sem mudar status e sem `generate_description`. Provas reais: T38 `7c555deb` (individual), SKU 45 `1b455d45` (massa), T37X `5577e279` (evento), T38 `525001a1` (recusa + aprovação válida) — os quatro em `ready_to_publish`, nunca publicar |
+| Regenerar posição (2026-09-12) | ✅ | `POST /listings/{id}/images/positions/{posicao}/regenerate` (0..4): placeholder `generating` com índice único parcial como trava, task `regenerate_position` preenche no lugar e apaga a anterior não aprovada só no sucesso; anúncio fica em `pending_image_approval`; aprovações recusam com 409 próprio durante a regeneração; custo com `task=image_edit_regen`. Branch `feat/regenerar-posicao`, sem merge |
 | Fase 6 | 🔲 | Frontend em produção (Vercel ou na própria VPS) + revisão humana de categoria + **tela de revisão/promoção de candidatos** |
 
 > **Railway e Vercel foram descartados para o backend.** A escolha final foi
@@ -377,7 +378,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `listing.py` — Listing (sku_external_id, sku_description, sku_brand, **sku_model**, price, status, ...) + **`approved_image_count`**, uma `column_property` com subconsulta correlata em `listing_images` (`approved` e `sort_order < CANDIDATE_SORT_ORDER_FLOOR`): sai na **mesma** consulta de qualquer `select(Listing)`, então a listagem de 200 continua em 2 statements e os endpoints que fazem `ListingSummary.model_validate(listing)` recebem o valor sem consulta a mais. **Não** usar `deferred=True`: no async o carregamento tardio estoura `MissingGreenlet` na serialização. Objeto `Listing(...)` criado em memória e nunca carregado tem o atributo `None` (testes com listing falso passam `approved_image_count=0`)
 - `listing_title.py` — ListingTitle + índice simples `ix_listing_titles_listing_id` (migração `f7b3e9c1d2a5`; lida por `listing_id` em 5 pontos)
 - `listing_attribute.py` — ListingAttribute (allowed_values JSONB, is_required, source, **`tags` JSONB** com o dicionário de tags do ML inteiro) + propriedade **`is_editable`** (`False` só com `hidden` ou `read_only`; `tags` nulo = editável, na dúvida mostrar; `fixed` fora da regra por decisão pendente) — a única definição, o frontend não reimplementa
-- `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order, kind, validation_error) + propriedade `is_candidate` (`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`), a única definição de candidata. Três índices em `listing_id`: os dois **parciais** de slot (`uq_listing_images_cover_slot`, `uq_listing_images_specs_slot`, únicos, com `WHERE` de capa/ficha aprovada) e, desde `f7b3e9c1d2a5`, o **simples** `ix_listing_images_listing_id`, que coexiste com eles e cobre o que eles não cobrem: "todas as imagens deste anúncio" (a subconsulta de `approved_image_count` fazia Seq Scan por linha da listagem sem ele: 153 ms → 1,2 ms na página de 200)
+- `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order, kind, validation_error) + propriedade `is_candidate` (`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`), a única definição de candidata. Três índices em `listing_id`: os dois **parciais** de slot (`uq_listing_images_cover_slot`, `uq_listing_images_specs_slot`, únicos, com `WHERE` de capa/ficha aprovada) e, desde `f7b3e9c1d2a5`, o **simples** `ix_listing_images_listing_id`, que coexiste com eles e cobre o que eles não cobrem: "todas as imagens deste anúncio" (a subconsulta de `approved_image_count` fazia Seq Scan por linha da listagem sem ele: 153 ms → 1,2 ms na página de 200). Vocabulário de status da regeneração: `GENERATING_STATUS` (placeholder), `GENERATION_FAILED_STATUS` (não produziu imagem; `validation_failed` continua sendo QA) e `POSITION_KINDS` (kind oficial por posição). Quarto índice em `listing_id`: `uq_listing_images_generating_slot (listing_id, sort_order) WHERE status = 'generating'`, a trava do duplo clique
 - `listing_review_event.py` — ListingReviewEvent (listing_id, user_id, action, mode, approved_count, review_seconds, created_at) — 1 linha por aprovação humana de imagens, imutável (sem `updated_at`). Apaga junto com o listing (FK `ON DELETE CASCADE` + `cascade="all, delete-orphan"` em `Listing.review_events`); `user_id` não cascateia
 - `listing_description.py` — ListingDescription
 - `listing_job.py` — ListingJob + índice simples `ix_listing_jobs_listing_id` (migração `f7b3e9c1d2a5`; lida só no detalhe, mas a tabela só cresce, recebe INSERT num único ponto e o detalhe é a tela mais aberta)
@@ -423,7 +424,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 ### backend/app/workers/tasks/
 - `ai_tasks.py` — `generate_title`, `generate_description`
 - `category_tasks.py` — `predict_category` (batch: UPDATE atômico `pending_description → generating_images` + só `generate_images.delay`, se sem attrs pendentes)
-- `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; sem foto bruta no bucket → `pending_raw_photos`, nunca fallback; `ensure_dimensions` antes do upload)
+- `image_tasks.py` — `generate_images` (`_fetch_upload_token` para refresh automático de token ML; guard de idempotência; **sempre gera**, sem reuso via ProductImage desde 2026-09-10; sem foto bruta no bucket → `pending_raw_photos`, nunca fallback; `ensure_dimensions` antes do upload). `_gerar_cinco_posicoes` é um laço de 0 a 4 sobre `_gerar_posicao(db, listing, ctx, numero, alvo=None)` com um `_ContextoGeracao` montado por `_montar_contexto` (`com_campos`/`com_copy` controlam a consulta de atributos e a copy do LLM). `regenerate_position(listing_id, image_id)`: regenera UMA posição no placeholder, nunca toca em `listing.status`, `ImageEngineUnavailableError` vira `generation_failed` na linha (nunca `pending_ai_engine`)
 - `raw_photo_tasks.py` — `check_pending_raw_photos` (beat, 15 min): retoma listings em `pending_raw_photos` quando as fotos aparecem no bucket. Lógica em `services/raw_photo_standby_service.py` (`try_resume_raw_photos`, UPDATE atômico + reentrada por `dispatch_image_generation`, que é só `generate_images.delay`)
 - `ai_engine_tasks.py` — `check_pending_ai_engine` (beat, 15 min): redispara listings em `pending_ai_engine` (motor OpenAI fora: crédito, 401/403, 5xx, timeout). Sem pré-checagem, a OpenAI não expõe saldo: tentar é a checagem. `_tentar` deixa `ImageEngineUnavailableError` subir na última tentativa e o worker aborta a geração inteira (rollback das posições parciais) em vez de seguir com galeria parcial ou cair em `failed` 
 - `publish_tasks.py` — `publish_listing` (MLValidationError → failed sem retry)
@@ -462,10 +463,21 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_migracao_tags_atributos.py` — migração `e5f9c3b7a2d4`: encadeia no head (sem banco) (1); downgrade remove / upgrade recria a coluna JSONB nullable (Postgres real) (1) (2)
 - `test_listing_summary_para_fila.py` — Postgres real (só com `TEST_DATABASE_URL`): `ListingSummary.model_validate` de uma linha real traz `ml_category_id`, `sku_description` e `approved_image_count` (1); contagem de aprovadas na mesma resposta de `list_listings` — 5→5, 4→4, candidata aprovada em `sort_order` 90 não conta, 5 geradas sem aprovar → 0, sem imagem → 0 (1); `list_listings` emite o mesmo número de statements com 1 e com 10 anúncios (contagem + página; imprime o SQL com `-s`) (1); `GET /listings` real devolve os três campos por item (1) (4)
 - `test_migracao_indices_fk.py` — migração `f7b3e9c1d2a5`: encadeia no head (sem banco) (1); Postgres real — downgrade remove os três índices e preserva os dois parciais de `listing_images`, upgrade recria, downgrade de novo remove (1); os três são btree simples em `(listing_id)`, sem `WHERE`, e o `indexdef` do `create_all` (models) é idêntico ao da migração (1) (3)
+- `test_regenerar_posicao_custo.py` — rótulo `task=image_edit_regen` via `set_image_edit_task`/`image_edit_task` (ContextVar própria; `cost_context()` intacto); motor OpenAI loga o rótulo quando fixado e `image_edit` sem ele (6)
+- `test_migracao_indice_regeneracao.py` — migração `a1d7c3e9f5b2`: encadeia no head (sem banco), vocabulário do model (sem banco); Postgres real: downgrade remove / upgrade recria sem tocar nos outros índices, DDL idêntico ao do model, dois placeholders `generating` na mesma posição colidem, placeholder convive com linha `uploaded` e com outra posição (2 sem banco + 4 PG)
+- `test_regenerar_posicao_worker.py` — `_gerar_posicao` isolada (uma chamada, kind da posição, `alvo` preenchido em vez de linha nova, QA reprovado guarda evidência, posição 0 com fallback dentro do alvo / em linha nova quando o alvo já virou `validation_failed`, `com_copy`/`com_campos` não pagam LLM nem consultam atributos, ValueError fora de 0..4), `_carregar_fotos_brutas`, e a orquestração de `_regenerate_position_async` com mocks (sucesso apaga anteriores e rotula custo, matriz `com_campos`/`com_copy` por posição, motor não produz → `generation_failed` mantendo a anterior, QA reprova mantém as duas, `ImageEngineUnavailableError` → rollback + `generation_failed` sem standby, fotos ausentes, skipped por placeholder consumido/inexistente/anúncio que saiu do status, `_mark_regen_failed`, registro da task na fila `images`) (30)
+- `test_regenerar_posicao_service.py` — sem banco: `regenerate_position` recusa fora de `pending_image_approval` antes de consultar, 422 fora de 0..4, 409 em posição aprovada sem placeholder nem enfileirar, commit ANTES do `delay`, kind por posição, `IntegrityError` → 409 próprio; rota declarada com 202 e `ImageOut`; `approve_images` 409 com mensagem própria e sem escrita; `bulk_approve_images` item falho (cerca `NOT EXISTS` dentro do UPDATE, que continua o 2º statement), "nenhuma imagem aprovável" preservado, caminho normal sem consulta extra (17)
+- `test_regenerar_posicao_pg.py` — Postgres real (só com `TEST_DATABASE_URL`): substitui só a posição pedida e rotula o custo; falha do motor mantém a anterior e o status; posição 0 cai no fallback; aprovada recusada; duplo disparo gera um placeholder; aprovações bloqueadas com zero eventos; worker apaga só a não aprovada (aprovada e candidata 90 sobrevivem); aprovação que venceu a corrida faz o worker apagar o placeholder (8)
 
-> Suíte completa: **472 passed, 56 skipped** sem `TEST_DATABASE_URL`; **528 passed** com ela (2026-09-12, medido em `f9f3478`). Os pulados são os testes
-> com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py` — e a corrida real de
-> `test_promocao_indice_unico.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
+> Suíte completa: **537 passed, 68 skipped** sem `TEST_DATABASE_URL`; **605
+> passed** com ela (2026-09-12, medido em `d2abc8d`, branch
+> `feat/regenerar-posicao`). Os 68 pulados são os 56 antigos de Postgres real
+> mais os 4 de `test_migracao_indice_regeneracao.py` e os 8 de
+> `test_regenerar_posicao_pg.py`. Nenhum teste pré-existente mudou — só os 5
+> arquivos novos listados acima. Baseline anterior à branch: **482 passed, 56
+> skipped** sem `TEST_DATABASE_URL`; **538 passed** com ela. Os pulados sem
+> `TEST_DATABASE_URL` são os testes com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py` e `test_migracao_indice_regeneracao.py` — e a corrida real de
+> `test_promocao_indice_unico.py` e `test_regenerar_posicao_pg.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
 > `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
 > Os testes reais fazem `drop_all`/`create_all` no `publicar_test` e são donos exclusivos dele — nunca rodar duas suítes (ou uma suíte e um arquivo avulso) contra ele ao mesmo tempo; a colisão aparece como `DBAPIError` em `DROP TABLE`.
@@ -487,7 +499,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `c8d2f6a4e1b7` — drop de `listing_images.review_seconds` (o tempo de revisão vive só no evento)
 - `d4e8b2a6f9c1` — índice composto `ix_listings_seller_status_created` (seller_id, status, created_at DESC)
 - `e5f9c3b7a2d4` — `listing_attributes.tags` (JSONB nullable, sem preenchimento retroativo: linhas antigas ficam NULL = editáveis)
-- `f7b3e9c1d2a5` — índices simples em `listing_id` de `listing_images` (`ix_listing_images_listing_id`, coexiste com os dois parciais de slot), `listing_titles` e `listing_jobs`. As outras 4 FKs sem índice (`listings.created_by`, `batch_imports.created_by`, `listing_review_events.user_id`, `batch_import_rows.listing_id`) ficaram de fora de propósito: nenhuma consulta filtra por elas (ver docstring da migração) (head atual)
+- `f7b3e9c1d2a5` — índices simples em `listing_id` de `listing_images` (`ix_listing_images_listing_id`, coexiste com os dois parciais de slot), `listing_titles` e `listing_jobs`. As outras 4 FKs sem índice (`listings.created_by`, `batch_imports.created_by`, `listing_review_events.user_id`, `batch_import_rows.listing_id`) ficaram de fora de propósito: nenhuma consulta filtra por elas (ver docstring da migração)
+- `a1d7c3e9f5b2` — índice único parcial `uq_listing_images_generating_slot` (trava do placeholder de regeneração) (head atual)
 
 ---
 
@@ -577,6 +590,23 @@ transação da aprovação: individual (`images/approve`) guarda o
 (`bulk/approve-images`) grava sempre `review_seconds=NULL` e `mode="bulk"` —
 nunca estima nem reparte tempo entre os anúncios do lote.
 
+**Regenerar uma posição não muda o anúncio de status.** O placeholder
+`generating` bloqueia `approve_images`/`bulk_approve_images` com 409 próprio.
+No sucesso a anterior não aprovada da posição é apagada (`asset_key` no log);
+falha do motor vira `generation_failed` na linha e a anterior fica; QA
+reprovada vira `validation_failed` e a anterior também fica (duas linhas não
+aprovadas na posição até a próxima regeneração). Copy da posição 2 é gerada
+de novo a cada regeneração (texto pode mudar; a tela precisa avisar). Os dois
+caminhos verificam a trava de jeito diferente: `bulk_approve_images` cerca o
+`UPDATE` com um `NOT EXISTS` (aliased) **dentro** do próprio `UPDATE`, então o
+`UPDATE` continua sendo o 2º statement e a cerca é atômica com a escrita — o
+`SELECT` de diagnóstico só roda quando `rowcount == 0`, pra distinguir "havia
+`generating`" de "nenhuma imagem aprovável"; `approve_images` já tem a lista
+`images` carregada, então checa nela mesma, sem consulta extra. **As duas
+mensagens de 409 são strings diferentes** — a do endpoint termina em
+"...; aguarde." e a de `bulk_approve_images` em "...; aguarde a conclusão
+antes de aprovar." — a tela de revisão precisa casar com as duas.
+
 > **Vertical seria destrutivo aqui.** `normalize_to_square` **recorta o
 > centro**, não adiciona borda: um canvas 3:4 perderia o painel de texto das
 > posições 1–3 — o texto que justifica a existência delas — e **ainda passaria
@@ -653,6 +683,7 @@ POST   /api/v1/listings/{id}/images/cover-ai-variant     candidato cover_ai (sor
 POST   /api/v1/listings/{id}/images/specs-ai-variant     candidato specs_ai (sort_order 91)
 POST   /api/v1/listings/{id}/images/{img}/promote-cover  quem ocupa sort_order 0
 POST   /api/v1/listings/{id}/images/{img}/promote-specs  quem ocupa o slot de ficha
+POST   /api/v1/listings/{id}/images/positions/{posicao}/regenerate   regenera UMA posição (0..4) não aprovada, só em pending_image_approval; 202 com o placeholder
 ```
 
 > **Todo `/listings/bulk/*` devolve `BulkResult`** (`processed`, `failed`, `results[{listing_id, success, error}]`) e recusa item fora do status esperado com `"estado inválido"`, sem derrubar os outros. A fila deriva as ações do status dos selecionados e mostra o motivo por SKU; erro técnico (`SQL`, `Traceback`, `sqlalchemy`, texto longo) nunca chega cru à tela.
@@ -812,3 +843,4 @@ Esses dados devem estar no catálogo de produtos antes do pipeline de batch.
 | docs/superpowers/specs/esquema-5-posicoes.md | Esquema de 5 posições (padrão único de imagens) |
 | docs/superpowers/specs/2026-09-10-entrega-ao-seller-bucket-proprio-pausada.md | Entrega no bucket do seller: ideia pausada e como retomar |
 | docs/superpowers/specs/frontend-fluxo-operador.md | Fluxo do operador: desenho do frontend (bloco B), aprovado em 2026-09-11. A fila de trabalho (item 1) foi **construída em 2026-09-12** (`e176fb2`, `41c9d6d`, `2349bb5`); as decisões tomadas na construção e as **pendências conhecidas** (5 fixo na marca de incompleto, "estado inválido" obscuro, seleção por filtro, sondagem de fotos brutas) estão lá. Faltam revisão de imagens por posição e atributos por `is_editable` |
+| docs/superpowers/specs/2026-09-12-regenerar-posicao.md | Regeneração de UMA posição: decisões do passo 0, contrato, guards do worker, pendências |
