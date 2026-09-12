@@ -25,6 +25,11 @@ _precisa_db = pytest.mark.skipif(
 # (mais dificil de ler numa falha).
 _contador_mlb = count(1)
 
+# Sentinela pra distinguir "mlb_id omitido" (gera um valor) de "mlb_id
+# explicitamente None" (deixa NULL) — spec.get("mlb_id") sozinho nao
+# consegue, porque os dois casos devolvem None.
+_AUSENTE = object()
+
 
 async def _preparar_banco():
     """Cria o engine do banco dedicado (`_engine_dedicado`, que valida o nome
@@ -56,9 +61,12 @@ async def _semear(session_maker, especificacao):
     - `sku` -> `Listing.sku_external_id`
     - `title` -> `Listing.selected_title`
     - `brand` -> `Listing.sku_brand` (default "b")
-    - `mlb_id` -> `Listing.mlb_id` (UNIQUE na tabela: se omitido, gera um
-      valor distinto usando o contador de modulo, pra nao colidir entre
-      listings de testes diferentes)
+    - `mlb_id` -> `Listing.mlb_id` (UNIQUE na tabela: se a chave for
+      OMITIDA, gera um valor distinto usando o contador de modulo, pra nao
+      colidir entre listings de testes diferentes; se vier explicitamente
+      `None`, o listing nasce com `mlb_id` NULL de proposito — os dois casos
+      sao distintos via sentinela `_AUSENTE`, nao dariam pra diferenciar com
+      `spec.get("mlb_id")` sozinho)
 
     Devolve `(user_id, [seller_ids])`, na mesma ordem dos sellers recebidos
     em `especificacao` — quem chama identifica "o seller A" e "o seller B"
@@ -90,8 +98,8 @@ async def _semear(session_maker, especificacao):
             seller_ids.append(seller.id)
 
             for spec in listings_do_seller:
-                mlb_id = spec.get("mlb_id")
-                if mlb_id is None:
+                mlb_id = spec.get("mlb_id", _AUSENTE)
+                if mlb_id is _AUSENTE:
                     mlb_id = f"MLB{next(_contador_mlb):010d}"
                 s.add(
                     Listing(
@@ -389,6 +397,11 @@ class TestBusca:
 
     @pytest.mark.asyncio
     async def test_busca_por_marca(self):
+        """"fatal" tambem casaria pelo titulo ("Body Splash Fatal"), entao
+        nao prova nada sobre a clausula de marca — o teste passaria mesmo
+        com `Listing.sku_brand.ilike(...)` apagado do `or_`. "outra" so
+        aparece na marca do SKU-GAMA (`title=None`), entao so a clausula de
+        marca pode fazer esta busca casar."""
         from app.services.listing_service import ListingService
 
         engine, sm = await _preparar_banco()
@@ -396,10 +409,10 @@ class TestBusca:
             seller_a, seller_b = await self._semear_ab(sm)
             async with sm() as s:
                 pagina = await ListingService(s).list_listings(
-                    seller_a, None, 1, 20, search="fatal"
+                    seller_a, None, 1, 20, search="outra"
                 )
             assert pagina.total == 1, pagina.total
-            assert pagina.items[0].sku_external_id == "SKU-BETA"
+            assert pagina.items[0].sku_external_id == "SKU-GAMA"
         finally:
             await engine.dispose()
 
@@ -517,6 +530,40 @@ class TestPaginacao:
 
             assert pagina_50.items == []
             assert pagina_50.total == 5
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_paginacao_sem_duplicata_nem_lacuna_com_created_at_empatado(self):
+        """Os 5 listings nascem na MESMA chamada de `_semear` (1 unico
+        `await s.commit()`), entao compartilham o `created_at` da transacao
+        — exatamente o cenario de um batch import. Sem desempate por `id`
+        em `order_by`, a ordem entre eles fica a criterio do plano do
+        Postgres, e paginando com OFFSET/LIMIT um listing pode aparecer em
+        duas paginas (duplicata) ou em nenhuma (lacuna). Percorre TODAS as
+        paginas ate uma vazia e confere que a uniao dos ids bate exatamente
+        com o conjunto semeado, sem repeticao."""
+        from app.services.listing_service import ListingService
+
+        engine, sm = await _preparar_banco()
+        try:
+            especificacao = [[{"status": "failed"}] * 5]
+            user_id, (seller_a,) = await _semear(sm, especificacao)
+
+            ids_coletados = []
+            pagina_num = 1
+            async with sm() as s:
+                svc = ListingService(s)
+                while True:
+                    pagina = await svc.list_listings(seller_a, ["failed"], pagina_num, 2)
+                    if not pagina.items:
+                        break
+                    ids_coletados.extend(item.id for item in pagina.items)
+                    pagina_num += 1
+                    assert pagina_num < 20, "paginacao nao terminou — possivel loop infinito"
+
+            assert len(ids_coletados) == len(set(ids_coletados)) == 5, ids_coletados
+
         finally:
             await engine.dispose()
 

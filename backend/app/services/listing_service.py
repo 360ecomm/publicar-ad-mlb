@@ -88,7 +88,14 @@ class ListingService:
         )
         total = count_result.scalar_one()
 
-        query = query.order_by(Listing.created_at.desc())
+        # Desempate por id: created_at e' timestamp da TRANSACAO
+        # (server_default=func.now()), entao um lote de batch import cria
+        # varios listings com o MESMO created_at. Sem desempate, a ordem
+        # entre eles fica a criterio do plano do Postgres, e com
+        # OFFSET/LIMIT isso faz um listing aparecer em duas paginas ou em
+        # nenhuma. `id` (uuid4) nao tem ordem semantica, mas e' unico e
+        # estavel — suficiente pra paginacao ser deterministica.
+        query = query.order_by(Listing.created_at.desc(), Listing.id.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
         result = await self.db.execute(query)
         items = result.scalars().all()
