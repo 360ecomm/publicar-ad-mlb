@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func, or_
 from sqlalchemy import update as sa_update, delete as sa_delete
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 from app.models.listing import LISTING_STATUSES, Listing
 from app.models.listing_title import ListingTitle
 from app.models.listing_attribute import ListingAttribute
@@ -27,6 +28,14 @@ from app.models.user import User
 from app.models.seller import Seller
 from app.schemas.listing import ListingCreate, ListingPage, ListingStatusCounts, ListingSummary
 from app.schemas.bulk import BulkItemResult, BulkResult
+
+
+def _mensagem_regeneracao_em_andamento(posicoes: list[int]) -> str:
+    """Bloqueio das aprovacoes enquanto ha placeholder `generating`. Mensagem
+    PROPRIA, nao "estado invalido": o operador precisa saber que e'
+    temporario e qual posicao esta sendo refeita."""
+    lista = ", ".join(str(p) for p in posicoes)
+    return f"Regeneração em andamento na posição {lista}; aguarde a conclusão antes de aprovar."
 
 
 class ListingService:
@@ -441,6 +450,18 @@ class ListingService:
         )
         images = result.scalars().all()
 
+        # Regeneracao de posicao em andamento: aprovar agora marcaria o
+        # placeholder como `rejected` e o worker desistiria depois de ja ter
+        # pago a chamada (ou publicaria sem a posicao refeita). Bloqueia com
+        # mensagem propria, antes de qualquer escrita. Usa a lista ja
+        # carregada — nenhuma consulta a mais.
+        em_regeneracao = sorted(img.sort_order for img in images if img.status == GENERATING_STATUS)
+        if em_regeneracao:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_mensagem_regeneracao_em_andamento(em_regeneracao),
+            )
+
         approved_set = set(approved_ids)
         by_id = {img.id: img for img in images}
         # Recusa ANTES de qualquer escrita: uma lista so com ids de OUTRO
@@ -630,6 +651,7 @@ class ListingService:
                 if not listing or listing.status != "pending_image_approval":
                     results.append(BulkItemResult(listing_id=lid, success=False, error="estado inválido"))
                     continue
+
                 # Aprova o que esta na galeria E subiu ao ML — mesmo criterio
                 # da publicacao (`publish_service` so manda `approved and
                 # ml_picture_id`). Candidatas de IA sob demanda
@@ -645,26 +667,56 @@ class ListingService:
                 # do mesmo slot de colidirem no indice unico
                 # `uq_listing_images_cover_slot`: a reprovada simplesmente nao
                 # entra no UPDATE e continua `approved=False`.
+                #
+                # Mesmo bloqueio do individual, com item falho e mensagem
+                # propria em vez de derrubar o lote. A cerca vive DENTRO do
+                # UPDATE: `NOT EXISTS` de placeholder `generating` deste
+                # anuncio — atomica com a escrita (sem janela entre checar e
+                # aprovar) e sem statement novo antes do UPDATE, que
+                # `test_bulk_service` fixa como o 2o da sessao. `aliased` e'
+                # obrigatorio: sem ele o SQLAlchemy correlaciona a subconsulta
+                # com a propria tabela do UPDATE e a cerca passa a olhar so a
+                # linha corrente.
+                placeholder = aliased(ListingImage)
+                sem_regeneracao = ~(
+                    select(placeholder.id)
+                    .where(placeholder.listing_id == lid, placeholder.status == GENERATING_STATUS)
+                    .exists()
+                )
                 update_result = await self.db.execute(
                     sa_update(ListingImage)
                     .where(
                         ListingImage.listing_id == lid,
                         ListingImage.sort_order < CANDIDATE_SORT_ORDER_FLOOR,
                         ListingImage.ml_picture_id.isnot(None),
+                        sem_regeneracao,
                     )
                     .values(approved=True)
                     .execution_options(synchronize_session=False)
                 )
-                # Nada bateu o filtro (toda posicao reprovada no QA): o
-                # anuncio nao pode avancar sem imagem — nem evento, nem
-                # status, nem `generate_description` (que gastaria uma chamada
-                # ao Gemini). Rollback antes de seguir pro proximo item, pra
-                # nao carregar estado sujo da transacao pra ele.
+                # Nada bateu o filtro: ou toda posicao reprovou no QA, ou ha
+                # regeneracao em andamento (a cerca zera o UPDATE). Rollback
+                # antes de seguir, e uma consulta separa os dois casos com a
+                # mensagem certa. `sorted(...)` ITERA o resultado de proposito
+                # (ver Task 6 do plano 2026-09-12-regenerar-posicao): nao
+                # trocar por `if r:`.
                 if update_result.rowcount == 0:
                     await self.db.rollback()
-                    results.append(
-                        BulkItemResult(listing_id=lid, success=False, error="nenhuma imagem aprovável")
+                    em_regeneracao = sorted(
+                        (
+                            await self.db.execute(
+                                select(ListingImage.sort_order).where(
+                                    ListingImage.listing_id == lid,
+                                    ListingImage.status == GENERATING_STATUS,
+                                )
+                            )
+                        ).scalars().all()
                     )
+                    erro = (
+                        _mensagem_regeneracao_em_andamento(em_regeneracao)
+                        if em_regeneracao else "nenhuma imagem aprovável"
+                    )
+                    results.append(BulkItemResult(listing_id=lid, success=False, error=erro))
                     continue
 
                 # Evento de revisao humana, na MESMA transacao da aprovacao —

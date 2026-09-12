@@ -119,3 +119,119 @@ def test_rota_declarada_com_202_e_image_out():
     rota = rotas[("/api/v1/listings/{listing_id}/images/positions/{posicao}/regenerate", ("POST",))]
     assert rota.status_code == 202
     assert rota.response_model.__name__ == "ImageOut"
+
+
+class TestAprovacaoBloqueadaDuranteRegeneracao:
+    def _img(self, sort_order, status, approved=False):
+        img = MagicMock(); img.id = uuid.uuid4(); img.sort_order = sort_order
+        img.status = status; img.approved = approved; img.kind = "benefits_ai"; img.ml_picture_id = "p"
+        return img
+
+    @pytest.mark.asyncio
+    async def test_approve_images_409_com_mensagem_propria(self):
+        from app.services.listing_service import ListingService
+
+        listing = _listing()
+        normal, gerando = self._img(1, "uploaded"), self._img(2, "generating")
+        db = _db_com_linhas([normal, gerando])
+        with patch("app.workers.tasks.ai_tasks.generate_description") as gen:
+            with pytest.raises(HTTPException) as exc:
+                await ListingService(db).approve_images(listing, [normal.id], user_id=uuid.uuid4())
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "Regeneração em andamento na posição 2; aguarde a conclusão antes de aprovar."
+        assert listing.status == "pending_image_approval"
+        db.add.assert_not_called(), "nenhum evento de revisao"
+        db.commit.assert_not_awaited(); gen.delay.assert_not_called()
+        assert normal.approved is False and gerando.status == "generating"
+
+    @pytest.mark.asyncio
+    async def test_approve_images_lista_todas_as_posicoes_em_regeneracao(self):
+        from app.services.listing_service import ListingService
+
+        db = _db_com_linhas([self._img(4, "generating"), self._img(0, "generating"), self._img(1, "uploaded")])
+        with pytest.raises(HTTPException) as exc:
+            await ListingService(db).approve_images(_listing(), [uuid.uuid4()], user_id=uuid.uuid4())
+        assert "posição 0, 4;" in exc.value.detail
+
+    def _db_bulk(self, listing, rowcount, em_regeneracao):
+        """Statements de `bulk_approve_images`, na ordem: 1 SELECT Listing,
+        2 UPDATE (com a cerca NOT EXISTS dentro), 3 (so quando rowcount == 0)
+        SELECT das posicoes em regeneracao."""
+        db = AsyncMock(); statements = []
+
+        async def execute_side(stmt):
+            statements.append(stmt)
+            r = MagicMock()
+            if len(statements) == 1:
+                r.scalar_one_or_none = MagicMock(return_value=listing)
+            elif len(statements) == 2:
+                r.rowcount = rowcount
+            else:
+                r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=list(em_regeneracao))))
+            return r
+
+        db.execute = execute_side; db.commit = AsyncMock(); db.add = MagicMock(); db.rollback = AsyncMock()
+        return db, statements
+
+    @pytest.mark.asyncio
+    async def test_bulk_approve_images_item_falho_com_mensagem_propria(self):
+        """A cerca vive DENTRO do UPDATE (NOT EXISTS placeholder generating):
+        com regeneracao em andamento o UPDATE aprova zero linhas, e a
+        consulta seguinte e' o que separa este caso de "nenhuma imagem
+        aprovavel"."""
+        from app.services.listing_service import ListingService
+
+        listing = _listing()
+        db, statements = self._db_bulk(listing, rowcount=0, em_regeneracao=[3])
+        with patch("app.workers.tasks.ai_tasks.generate_description") as gen:
+            result = await ListingService(db, listing.seller_id).bulk_approve_images(
+                [listing.id], user_id=uuid.uuid4())
+
+        assert result.processed == 0 and result.failed == 1
+        assert result.results[0].error == "Regeneração em andamento na posição 3; aguarde a conclusão antes de aprovar."
+        assert listing.status == "pending_image_approval"
+        db.commit.assert_not_awaited(); db.rollback.assert_awaited(); gen.delay.assert_not_called()
+        assert len(statements) == 3
+        update_sql = str(statements[1])
+        assert update_sql.startswith("UPDATE listing_images"), update_sql
+        assert "NOT (EXISTS" in update_sql, update_sql
+        assert "listing_images_1.status" in update_sql, "subconsulta com alias, sem correlacionar com o UPDATE"
+        assert "listing_images.kind" not in update_sql
+
+    @pytest.mark.asyncio
+    async def test_bulk_sem_nada_aprovavel_continua_com_a_mensagem_antiga(self):
+        from app.services.listing_service import ListingService
+
+        listing = _listing()
+        db, statements = self._db_bulk(listing, rowcount=0, em_regeneracao=[])
+        with patch("app.workers.tasks.ai_tasks.generate_description") as gen:
+            result = await ListingService(db, listing.seller_id).bulk_approve_images(
+                [listing.id], user_id=uuid.uuid4())
+        assert result.failed == 1 and result.results[0].error == "nenhuma imagem aprovável"
+        assert len(statements) == 3 and listing.status == "pending_image_approval"
+        gen.delay.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_bulk_sem_regeneracao_segue_normal_com_o_update_em_segundo(self):
+        from app.services.listing_service import ListingService
+
+        listing = _listing()
+        db, statements = self._db_bulk(listing, rowcount=5, em_regeneracao=[])
+        with patch("app.workers.tasks.ai_tasks.generate_description") as gen:
+            result = await ListingService(db, listing.seller_id).bulk_approve_images(
+                [listing.id], user_id=uuid.uuid4())
+        assert result.processed == 1 and listing.status == "generating_description"
+        gen.delay.assert_called_once()
+        assert len(statements) == 2, "sem rowcount 0 nao ha consulta extra"
+        update_sql = str(statements[1])
+        assert "UPDATE listing_images" in update_sql
+        assert "listing_images.sort_order <" in update_sql
+        assert "listing_images.ml_picture_id IS NOT NULL" in update_sql
+        assert "listing_images.kind" not in update_sql
+
+
+def test_mensagem_de_regeneracao_em_andamento():
+    from app.services.listing_service import _mensagem_regeneracao_em_andamento
+    assert _mensagem_regeneracao_em_andamento([2]) == (
+        "Regeneração em andamento na posição 2; aguarde a conclusão antes de aprovar.")
+    assert _mensagem_regeneracao_em_andamento([0, 4]).startswith("Regeneração em andamento na posição 0, 4;")
