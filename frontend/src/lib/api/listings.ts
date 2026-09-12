@@ -6,6 +6,7 @@ import type {
   Condition,
   BulkResult,
   ListingAttributesRow,
+  StatusCounts,
 } from "@/types/listing"
 
 export interface CreateListingPayload {
@@ -26,17 +27,39 @@ export async function createListing(
   })
 }
 
-export async function getListings(params?: {
-  status?: string
+export interface GetListingsParams {
+  /**
+   * Um ou vários status. Cada item vira um `status=` repetido na query
+   * (`?status=a&status=b`), que é o formato que o backend espera. String
+   * simples continua aceita para não quebrar quem passa um status só.
+   * Vazio ou ausente não manda o parâmetro.
+   */
+  status?: string | string[]
+  /** Busca por SKU, título, descrição, marca ou MLB. Vazio não vai na query. */
+  search?: string
   page?: number
   page_size?: number
-}): Promise<ListingsResponse> {
+}
+
+export async function getListings(
+  params?: GetListingsParams
+): Promise<ListingsResponse> {
   const query = new URLSearchParams()
-  if (params?.status) query.set("status", params.status)
+  const statuses =
+    typeof params?.status === "string" ? [params.status] : params?.status ?? []
+  for (const status of statuses) {
+    if (status) query.append("status", status)
+  }
+  if (params?.search) query.set("search", params.search)
   if (params?.page) query.set("page", String(params.page))
   if (params?.page_size) query.set("page_size", String(params.page_size))
   const qs = query.toString()
   return apiFetch<ListingsResponse>(`/api/v1/listings${qs ? `?${qs}` : ""}`)
+}
+
+/** Contagem por status do seller ativo, direto do banco (nunca do que está carregado). */
+export async function getStatusCounts(): Promise<StatusCounts> {
+  return apiFetch<StatusCounts>("/api/v1/listings/status-counts")
 }
 
 export async function getListing(id: string): Promise<ListingDetail> {

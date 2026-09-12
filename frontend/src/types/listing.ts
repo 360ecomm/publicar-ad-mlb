@@ -96,6 +96,17 @@ export interface ListingsResponse {
   page_size: number
 }
 
+/**
+ * Resposta de GET /listings/status-counts. `by_status` é indexado por string,
+ * NÃO por ListingStatus: o backend devolve também status legados fora da
+ * lista, de propósito, para que nenhum anúncio suma da conta. Um
+ * Record<ListingStatus, number> faria o legado sumir do total exibido.
+ */
+export interface StatusCounts {
+  by_status: { [status: string]: number }
+  total: number
+}
+
 export const STATUS_LABELS: Record<ListingStatus, string> = {
   draft: "Rascunho",
   generating_title: "Gerando título",
@@ -115,22 +126,62 @@ export const STATUS_LABELS: Record<ListingStatus, string> = {
   failed: "Com erro",
 }
 
-export const PROCESSING_STATUSES: ListingStatus[] = [
-  "generating_title",
-  "predicting_category",
-  "generating_images",
-  "generating_description",
-  "publishing",
+// ---------------------------------------------------------------------------
+// Os três blocos da barra de resumo (fila de trabalho, bloco B)
+//
+// - processing: o sistema está trabalhando, nada a fazer.
+// - waiting:    exige ação humana. `failed` fica aqui (erro exige decisão),
+//               `draft` também (espera alguém iniciar o pipeline) e
+//               `ready_to_publish` idem (última decisão humana antes do ML).
+// - done:       no ar ou pausado no ML.
+//
+// STATUS_GROUP_OF é a única fonte: um Record<ListingStatus, ...> obriga cada
+// um dos 16 status a aparecer EXATAMENTE uma vez (chave faltando ou repetida
+// é erro de compilação). Status novo no backend, adicionado em ListingStatus,
+// derruba o `tsc` até ganhar um bloco — nunca fica invisível na barra.
+// ---------------------------------------------------------------------------
+
+export type StatusGroupKey = "processing" | "waiting" | "done"
+
+export const STATUS_GROUP_OF: Record<ListingStatus, StatusGroupKey> = {
+  draft: "waiting",
+  generating_title: "processing",
+  pending_title_approval: "waiting",
+  predicting_category: "processing",
+  pending_seller_attributes: "waiting",
+  pending_description: "waiting",
+  generating_images: "processing",
+  pending_raw_photos: "waiting",
+  pending_ai_engine: "waiting",
+  pending_image_approval: "waiting",
+  generating_description: "processing",
+  ready_to_publish: "waiting",
+  publishing: "processing",
+  published: "done",
+  published_paused: "done",
+  failed: "waiting",
+}
+
+export interface StatusGroup {
+  key: StatusGroupKey
+  label: string
+  statuses: ListingStatus[]
+}
+
+function statusesOf(group: StatusGroupKey): ListingStatus[] {
+  return (Object.keys(STATUS_GROUP_OF) as ListingStatus[]).filter(
+    (status) => STATUS_GROUP_OF[status] === group
+  )
+}
+
+export const STATUS_GROUPS: StatusGroup[] = [
+  { key: "processing", label: "Processando", statuses: statusesOf("processing") },
+  { key: "waiting", label: "Esperando você", statuses: statusesOf("waiting") },
+  { key: "done", label: "Concluído", statuses: statusesOf("done") },
 ]
 
-export const WAITING_STATUSES: ListingStatus[] = [
-  "pending_title_approval",
-  "pending_seller_attributes",
-  "pending_image_approval",
-  "pending_raw_photos",
-  "pending_ai_engine",
-  "ready_to_publish",
-]
+/** @deprecated Usar STATUS_GROUPS / STATUS_GROUP_OF. Mantido porque listings/[id]/page.tsx ainda lê. */
+export const PROCESSING_STATUSES: ListingStatus[] = statusesOf("processing")
 
 export interface BulkItemResult {
   listing_id: string
