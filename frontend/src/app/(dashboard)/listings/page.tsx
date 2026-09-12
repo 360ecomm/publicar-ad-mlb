@@ -1,6 +1,6 @@
 import Link from "next/link"
-import { Plus } from "lucide-react"
-import { PipelineBoard } from "@/components/listings/PipelineBoard"
+import { Plus, Columns3 } from "lucide-react"
+import { WorkQueue } from "@/components/listings/WorkQueue"
 import { Button } from "@/components/ui/button"
 
 export default function ListingsPage() {
@@ -9,18 +9,26 @@ export default function ListingsPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Anúncios</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Gerencie seus anúncios no Mercado Livre. Atualiza automaticamente a cada 8 segundos.
+          <p className="text-sm text-muted-foreground mt-1">
+            Fila de trabalho: clique na linha para ir direto à etapa que espera ação.
           </p>
         </div>
-        <Button asChild size="sm">
-          <Link href="/listings/new">
-            <Plus className="w-4 h-4 mr-1" />
-            Novo anúncio
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="ghost" size="sm" title="Quadro antigo, com ações em massa (transitório)">
+            <Link href="/listings/board">
+              <Columns3 className="w-4 h-4 mr-1" />
+              Quadro
+            </Link>
+          </Button>
+          <Button asChild size="sm">
+            <Link href="/listings/new">
+              <Plus className="w-4 h-4 mr-1" />
+              Novo anúncio
+            </Link>
+          </Button>
+        </div>
       </div>
-      <PipelineBoard />
+      <WorkQueue />
     </div>
   )
 }
