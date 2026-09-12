@@ -426,6 +426,31 @@ class ListingService:
         regenerate_position.delay(str(listing.id), str(placeholder.id))
         return placeholder
 
+    async def recusar_se_regeneracao_em_andamento(self, listing: Listing) -> None:
+        """409 com a mensagem das aprovacoes enquanto houver placeholder `generating`.
+
+        Usado pelos endpoints de promocao (`promote_cover`/`promote_specs`):
+        promover aprova uma linha, e `promote_cover` rebaixa quem ocupa
+        `sort_order` 0 — inclusive o placeholder `cover_ai` da regeneracao, que
+        iria parar em 90. O worker, ao terminar, encontraria o placeholder fora
+        do esquema de 5 posicoes.
+        """
+        posicoes = sorted(
+            (
+                await self.db.execute(
+                    select(ListingImage.sort_order).where(
+                        ListingImage.listing_id == listing.id,
+                        ListingImage.status == GENERATING_STATUS,
+                    )
+                )
+            ).scalars().all()
+        )
+        if posicoes:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_mensagem_regeneracao_em_andamento(posicoes),
+            )
+
     async def approve_images(
         self,
         listing: Listing,

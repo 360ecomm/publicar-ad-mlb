@@ -44,6 +44,38 @@ class _AmbienteComRotulo(_Ambiente):
         return await super()._edit(images, prompt, n, size)
 
 
+class _AmbienteQueAprovaDurante(_Ambiente):
+    """Um humano aprova a linha anterior ENQUANTO o motor gera.
+
+    A geracao leva minutos; entre a consulta que captura as anteriores e o
+    DELETE do sucesso cabe uma aprovacao. Sem o predicado dentro do DELETE, a
+    regeneracao apagaria uma imagem aprovada — e publicada.
+    """
+
+    def __init__(self, sm, listing_id, ml_picture_id, **kw):
+        super().__init__(**kw)
+        self._sm = sm
+        self._listing_id = listing_id
+        self._ml_picture_id = ml_picture_id
+
+    async def _edit(self, images, prompt, n, size=None):
+        from sqlalchemy import update
+
+        from app.models.listing_image import ListingImage
+
+        async with self._sm() as s:
+            await s.execute(
+                update(ListingImage)
+                .where(
+                    ListingImage.listing_id == self._listing_id,
+                    ListingImage.ml_picture_id == self._ml_picture_id,
+                )
+                .values(approved=True)
+            )
+            await s.commit()
+        return await super()._edit(images, prompt, n, size)
+
+
 @asynccontextmanager
 async def _sessao_real(sm):
     async with sm() as s:
@@ -284,6 +316,37 @@ class TestRegeneracaoPontaAPonta:
             assert id_candidata in ids, "candidata em 90 nao e' desta posicao"
             assert pid in ids and id_velha not in ids
             assert next(r for r in depois if r[0] == id_aprovada)[5] is True
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_anterior_aprovada_durante_a_geracao_sobrevive(self, caplog):
+        """A cerca real e' o predicado DO DELETE, avaliado no momento do delete.
+        A linha `p2` e' capturada como candidata a remocao, aprovada durante a
+        geracao, e o DELETE nao a alcanca: ficam duas linhas na posicao 2."""
+        import logging
+
+        engine, sm = await _preparar_banco()
+        try:
+            listing_id, seller_id, _ = await _semear(sm, CINCO)
+            id_antiga_2 = next(r[0] for r in await _linhas(sm, listing_id) if r[1] == 2)
+
+            pid = await _pedir_regeneracao(sm, listing_id, seller_id, 2)
+            ambiente = _AmbienteQueAprovaDurante(sm, listing_id, "p2")
+            with caplog.at_level(logging.WARNING, logger="app.workers.tasks.image_tasks"):
+                result, _ = await _rodar_worker(sm, listing_id, pid, ambiente)
+
+            assert result["status"] == "uploaded"
+            assert result["removidas"] == 0, "nada foi apagado — nao pode mentir no retorno"
+            assert "anteriores_preservadas=1" in caplog.text
+
+            depois = await _linhas(sm, listing_id)
+            na_2 = {r[0]: r for r in depois if r[1] == 2}
+            assert len(na_2) == 2, "a aprovada sobrevive ao lado da nova"
+            antiga = na_2[id_antiga_2]
+            assert antiga[4] == "p2" and antiga[5] is True, "aprovada, intocada"
+            novo = na_2[pid]
+            assert novo[3] == "uploaded" and novo[5] is False
         finally:
             await engine.dispose()
 

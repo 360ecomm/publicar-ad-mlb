@@ -230,6 +230,103 @@ class TestAprovacaoBloqueadaDuranteRegeneracao:
         assert "listing_images.kind" not in update_sql
 
 
+class TestCercaDasPromocoes:
+    """`promote_cover` rebaixa quem ocupa `sort_order` 0 para 90 — inclusive o
+    placeholder `generating` da regeneracao da capa, que o worker depois
+    encontraria fora do esquema de 5 posicoes. `promote_specs` aprova uma linha
+    da posicao que ainda esta sendo refeita. Os dois recusam durante a
+    regeneracao, com a MESMA mensagem das aprovacoes."""
+
+    def _db_posicoes(self, posicoes):
+        db = AsyncMock()
+        r = MagicMock(); r.scalars.return_value.all.return_value = list(posicoes)
+        db.execute = AsyncMock(return_value=r)
+        return db
+
+    @pytest.mark.asyncio
+    async def test_helper_levanta_409_com_a_mensagem_das_aprovacoes(self):
+        from app.services.listing_service import ListingService
+
+        svc = ListingService(self._db_posicoes([4, 0]))
+        with pytest.raises(HTTPException) as exc:
+            await svc.recusar_se_regeneracao_em_andamento(_listing())
+        assert exc.value.status_code == 409
+        assert exc.value.detail == (
+            "Regeneração em andamento na posição 0, 4; aguarde a conclusão antes de aprovar.")
+
+    @pytest.mark.asyncio
+    async def test_helper_nao_levanta_sem_placeholder(self):
+        from app.services.listing_service import ListingService
+
+        svc = ListingService(self._db_posicoes([]))
+        assert await svc.recusar_se_regeneracao_em_andamento(_listing()) is None
+
+    def _patches_endpoint(self, listing, cerca, modulo, nome, ordem):
+        from app.api.v1.endpoints import listings as rota
+
+        svc = MagicMock()
+        svc.get_or_404 = AsyncMock(return_value=listing)
+        svc.recusar_se_regeneracao_em_andamento = AsyncMock(side_effect=cerca)
+        promocao = AsyncMock(side_effect=lambda *a, **k: ordem.append("promocao"))
+        return svc, promocao, [
+            patch.object(rota, "ListingService", return_value=svc),
+            patch(f"{modulo}.{nome}", promocao),
+            patch.object(rota.ListingSummary, "model_validate", MagicMock()),
+        ]
+
+    _ENDPOINTS = [
+        ("promote_cover", "app.services.cover_variant_service", "promote_cover"),
+        ("promote_specs", "app.services.specs_variant_service", "promote_specs"),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint,modulo,nome", _ENDPOINTS)
+    async def test_a_cerca_roda_antes_da_promocao(self, endpoint, modulo, nome):
+        from contextlib import ExitStack
+
+        from app.api.v1.endpoints import listings as rota
+
+        ordem = []
+        svc, promocao, patches = self._patches_endpoint(
+            _listing(), lambda l: ordem.append("cerca"), modulo, nome, ordem)
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            await getattr(rota, endpoint)(
+                listing_id=uuid.uuid4(), image_id=uuid.uuid4(),
+                active_seller=MagicMock(), db=AsyncMock())
+
+        assert ordem == ["cerca", "promocao"]
+        svc.recusar_se_regeneracao_em_andamento.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint,modulo,nome", _ENDPOINTS)
+    async def test_cerca_que_recusa_impede_a_promocao(self, endpoint, modulo, nome):
+        from contextlib import ExitStack
+
+        from app.api.v1.endpoints import listings as rota
+
+        ordem = []
+        esperada = "Regeneração em andamento na posição 0; aguarde a conclusão antes de aprovar."
+
+        def _recusar(_listing_arg):
+            raise HTTPException(status_code=409, detail=esperada)
+
+        _svc, promocao, patches = self._patches_endpoint(
+            _listing(), _recusar, modulo, nome, ordem)
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            with pytest.raises(HTTPException) as exc:
+                await getattr(rota, endpoint)(
+                    listing_id=uuid.uuid4(), image_id=uuid.uuid4(),
+                    active_seller=MagicMock(), db=AsyncMock())
+
+        assert exc.value.status_code == 409 and exc.value.detail == esperada
+        promocao.assert_not_awaited()
+        assert ordem == []
+
+
 def test_mensagem_de_regeneracao_em_andamento():
     from app.services.listing_service import _mensagem_regeneracao_em_andamento
     assert _mensagem_regeneracao_em_andamento([2]) == (

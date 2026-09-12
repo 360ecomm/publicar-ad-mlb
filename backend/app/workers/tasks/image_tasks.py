@@ -639,13 +639,14 @@ async def _falhar_regeneracao(db, alvo, motivo: str) -> dict:
 
 
 async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
-    from sqlalchemy import select
+    from sqlalchemy import delete as sa_delete, select
 
     from app.database import worker_session
     from app.models.listing import Listing
     from app.models.listing_image import (
         COVER_DETERMINISTIC_KIND,
         GENERATING_STATUS,
+        POSITION_KINDS,
         ListingImage,
     )
     from app.models.seller import Seller
@@ -684,14 +685,27 @@ async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
             }
 
         posicao = alvo.sort_order
+        # 2b) Placeholder fora de 0..4: rebaixado a candidata (90) por uma
+        # promocao anterior a cerca dos endpoints de promocao, ou dado legado.
+        # `_gerar_posicao` levantaria ValueError e o Celery tentaria 3 vezes o
+        # mesmo erro deterministico; aqui a regeneracao e' descartada com
+        # motivo legivel na propria linha.
+        if posicao not in POSITION_KINDS:
+            return await _falhar_regeneracao(
+                db, alvo,
+                f"placeholder fora do esquema de 5 posições (sort_order={posicao}); "
+                "regeneração descartada",
+            )
+
         set_cost_context(listing_id=listing.id, sku=listing.sku_external_id)
         set_image_edit_task(IMAGE_EDIT_TASK_REGEN)
 
-        # 3) Quem ocupava a posicao ANTES de comecar: so estas podem ser
-        # apagadas no sucesso. Linhas criadas pela propria regeneracao (o
-        # fallback da capa, por exemplo) nunca entram aqui. Aprovada nao entra:
-        # o endpoint ja recusou a posicao aprovada, e o filtro e' a segunda
-        # cerca.
+        # 3) Quem ocupava a posicao ANTES de comecar: so estas sao CANDIDATAS a
+        # remocao no sucesso. Linhas criadas pela propria regeneracao (o
+        # fallback da capa, por exemplo) nunca entram aqui. Este filtro e' so a
+        # foto do estado inicial — a cerca de verdade e' o predicado do DELETE
+        # la embaixo, avaliado no MOMENTO do delete: entre esta consulta e o
+        # fim da geracao (minutos) alguem pode aprovar ou mover a linha.
         anteriores = (
             await db.execute(
                 select(ListingImage).where(
@@ -756,28 +770,51 @@ async def _regenerate_position_async(listing_id: str, image_id: str) -> dict:
         # 5) Sucesso: a nova subiu ao ML. As anteriores nao aprovadas saem, com
         # o asset_key de cada uma no log (o objeto no R2 continua la).
         #
+        # O DELETE repete o predicado (`sort_order`, `approved is False`) em vez
+        # de apagar os objetos carregados no passo 3: a geracao leva minutos e
+        # naquele intervalo um humano pode ter aprovado ou movido a linha. Sem o
+        # predicado no proprio DELETE, a regeneracao apagaria uma imagem que ja
+        # esta aprovada — e publicada.
+        #
         # Caso especial (so posicao 0): a IA pode ter sido reprovada no QA —
         # o PROPRIO `alvo` guarda essa evidencia como `validation_failed` — e
         # o fallback deterministico ter subido em uma LINHA NOVA. `subiu`
         # ainda e' True (a posicao foi ocupada, so nao pelo `alvo`), entao o
         # kind e o status reportados nao podem vir de `alvo`: ele fica com
         # `validation_failed` de proposito, como evidencia para o humano.
-        for a in anteriores:
-            await db.delete(a)
+        ids_anteriores = [aid for (aid, _s, _k) in anteriores_info]
+        removidas = 0
+        if ids_anteriores:
+            res = await db.execute(
+                sa_delete(ListingImage)
+                .where(
+                    ListingImage.id.in_(ids_anteriores),
+                    ListingImage.listing_id == listing.id,
+                    ListingImage.sort_order == posicao,
+                    ListingImage.approved.is_(False),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            removidas = res.rowcount
         await db.commit()
+        if removidas != len(ids_anteriores):
+            logger.warning(
+                "regen_posicao listing_id=%s posicao=%s anteriores_preservadas=%s (aprovadas ou movidas durante a geracao)",
+                listing.id, posicao, len(ids_anteriores) - removidas,
+            )
         for (aid, astatus, akey) in anteriores_info:
             logger.info(
-                "regen_posicao listing_id=%s posicao=%s apagada id=%s status=%s asset_key=%s",
+                "regen_posicao listing_id=%s posicao=%s candidata_a_remocao id=%s status=%s asset_key=%s",
                 listing.id, posicao, aid, astatus, akey,
             )
         kind_resultado = alvo.kind if alvo.status == "uploaded" else COVER_DETERMINISTIC_KIND
         logger.info(
             "regen_posicao listing_id=%s sku=%s posicao=%s image_id=%s kind=%s result=substituida removidas=%s",
-            listing.id, sku, posicao, alvo.id, kind_resultado, len(anteriores_info),
+            listing.id, sku, posicao, alvo.id, kind_resultado, removidas,
         )
         return {
             "listing_id": listing_id, "image_id": image_id, "posicao": posicao,
-            "status": "uploaded", "kind": kind_resultado, "removidas": len(anteriores_info),
+            "status": "uploaded", "kind": kind_resultado, "removidas": removidas,
         }
 
 

@@ -406,11 +406,15 @@ async def promote_cover(
     Limitação conhecida (aceita no piloto): duas promoções **de alvos
     diferentes** no mesmo anúncio, simultâneas, podem terminar com as duas em
     `sort_order=0`. Ver `cover_variant_service.promote_cover`.
+
+    409 enquanto houver regeneração de posição em andamento no anúncio: esta
+    promoção rebaixaria o placeholder `generating` da posição 0 para 90.
     """
     from app.services.cover_variant_service import promote_cover as _promote_cover
 
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
+    await svc.recusar_se_regeneracao_em_andamento(listing)
     await _promote_cover(db, listing, image_id)
     return ListingSummary.model_validate(listing)
 
@@ -432,11 +436,16 @@ async def promote_specs(
     Alvo de outro kind → 422 (inclusive capa, que tem endpoint próprio).
     Alvo de outro anúncio → 404. A ficha rebaixada vira candidata, nunca é
     apagada. Nada aqui roda automaticamente.
+
+    409 enquanto houver regeneração de posição em andamento no anúncio:
+    promover aprova uma linha por baixo de uma posição que ainda está sendo
+    refeita.
     """
     from app.services.specs_variant_service import promote_specs as _promote_specs
 
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)
+    await svc.recusar_se_regeneracao_em_andamento(listing)
     await _promote_specs(db, listing, image_id)
     return ListingSummary.model_validate(listing)
 

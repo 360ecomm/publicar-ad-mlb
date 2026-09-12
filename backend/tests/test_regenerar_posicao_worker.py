@@ -266,21 +266,43 @@ def _linha(sort_order, status="uploaded", asset_key="k-antiga", approved=False):
                         sort_order=sort_order, kind="benefits_ai", asset_key=asset_key)
 
 
-def _db_worker(alvo, listing, anteriores=(), extra=()):
-    """Respostas na ORDEM das consultas de `_regenerate_position_async`:
-    placeholder, listing, anteriores, seller (+ `extra`, ex.: recarga do
-    placeholder depois de rollback)."""
+def _db_worker(alvo, listing, anteriores=(), extra=(), removidas=None):
+    """Respostas na ORDEM dos statements de `_regenerate_position_async`:
+    placeholder, listing, anteriores, seller, (so quando ha anteriores) o
+    DELETE com o predicado (+ `extra`, ex.: recarga do placeholder depois de
+    rollback).
+
+    Os statements emitidos ficam em `db.statements` — e' o que prova que a
+    remocao das anteriores e' um DELETE com predicado, e nao `db.delete(obj)`.
+    """
     db = AsyncMock()
+    anteriores = list(anteriores)
     respostas = [
         MagicMock(scalar_one_or_none=MagicMock(return_value=alvo)),
         MagicMock(scalar_one=MagicMock(return_value=listing)),
-        MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=list(anteriores))))),
+        MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=anteriores)))),
         MagicMock(scalar_one=MagicMock(return_value=MagicMock())),
-        *extra,
     ]
-    db.execute = AsyncMock(side_effect=respostas)
+    if anteriores:
+        respostas.append(
+            MagicMock(rowcount=len(anteriores) if removidas is None else removidas)
+        )
+    respostas.extend(extra)
+    db.statements = []
+
+    async def _execute(stmt, *a, **kw):
+        db.statements.append(stmt)
+        return respostas[len(db.statements) - 1]
+
+    db.execute = AsyncMock(side_effect=_execute)
     db.add = MagicMock(); db.commit = AsyncMock(); db.rollback = AsyncMock(); db.delete = AsyncMock()
     return db
+
+
+def _deletes_de_anteriores(db):
+    """Os statements DELETE emitidos contra `listing_images` (o `db.delete(obj)`
+    do caminho "anuncio saiu do status" nao passa por `db.execute`)."""
+    return [s for s in db.statements if str(s).startswith("DELETE FROM listing_images")]
 
 
 def _patches_worker(db, gerar):
@@ -324,7 +346,15 @@ class TestRegenerarPosicaoWorker:
         result = await _rodar(db, gerar, listing.id, alvo.id)
 
         assert rotulos == [(2, "image_edit_regen")]
-        db.delete.assert_awaited_once_with(antiga)
+        # A remocao e' um DELETE com predicado, avaliado no momento do delete —
+        # nao `db.delete(objeto_carregado_minutos_atras)`.
+        db.delete.assert_not_awaited()
+        (stmt,) = _deletes_de_anteriores(db)
+        sql = str(stmt)
+        assert "listing_images.approved IS false" in sql, sql
+        assert "listing_images.sort_order = " in sql, sql
+        assert "listing_images.id IN " in sql, sql
+        assert stmt.compile().params["sort_order_1"] == 2
         db.commit.assert_awaited()
         assert listing.status == "pending_image_approval" and listing.error_message is None
         assert result["status"] == "uploaded" and result["removidas"] == 1
@@ -346,11 +376,53 @@ class TestRegenerarPosicaoWorker:
         db = _db_worker(alvo, listing, anteriores=[antiga])
         result = await _rodar(db, gerar, listing.id, alvo.id)
 
-        db.delete.assert_awaited_once_with(antiga)
+        assert len(_deletes_de_anteriores(db)) == 1
+        db.delete.assert_not_awaited()
         assert result["status"] == "uploaded"
         assert result["kind"] == "cover_deterministic"
         assert result["removidas"] == 1
         assert alvo.status == "validation_failed", "evidencia intocada"
+        assert listing.status == "pending_image_approval"
+
+    @pytest.mark.asyncio
+    async def test_anterior_que_o_predicado_recusa_e_contada_como_preservada(self, caplog):
+        """O DELETE devolve rowcount menor que os ids capturados (alguem aprovou
+        a linha durante a geracao): a regeneracao nao mente no retorno e avisa
+        no log — nunca finge que apagou."""
+        import logging
+
+        listing = _listing_pendente()
+        alvo = _placeholder(2, "benefits_ai")
+        antiga = _linha(2)
+
+        async def gerar(db, l, ctx, numero, alvo=None):
+            alvo.status = "uploaded"; alvo.ml_picture_id = "pic-novo"
+            return True
+
+        db = _db_worker(alvo, listing, anteriores=[antiga], removidas=0)
+        with caplog.at_level(logging.WARNING, logger="app.workers.tasks.image_tasks"):
+            result = await _rodar(db, gerar, listing.id, alvo.id)
+
+        assert result["removidas"] == 0
+        assert len(_deletes_de_anteriores(db)) == 1
+        assert "anteriores_preservadas=1" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_placeholder_fora_de_0_a_4_e_descartado_sem_gastar(self):
+        """Placeholder rebaixado a 90 por uma promocao: `_gerar_posicao`
+        levantaria ValueError e o Celery repetiria 3x o mesmo erro."""
+        listing = _listing_pendente()
+        alvo = _placeholder(90, "cover_ai")
+        gerar = AsyncMock()
+        db = _db_worker(alvo, listing)
+        result = await _rodar(db, gerar, listing.id, alvo.id)
+
+        gerar.assert_not_awaited()
+        assert result["status"] == "generation_failed"
+        assert alvo.status == "generation_failed"
+        assert "fora do esquema de 5 posições" in alvo.validation_error
+        assert "sort_order=90" in alvo.validation_error
+        assert db.execute.await_count == 2, "placeholder e listing; nem seller nem fotos"
         assert listing.status == "pending_image_approval"
 
     @pytest.mark.asyncio
@@ -395,6 +467,7 @@ class TestRegenerarPosicaoWorker:
         assert alvo.status == "generation_failed"
         assert alvo.validation_error
         db.delete.assert_not_awaited()
+        assert _deletes_de_anteriores(db) == [], "falha nao apaga a anterior"
         db.commit.assert_awaited()
         assert listing.status == "pending_image_approval" and listing.error_message is None
         assert result["status"] == "generation_failed"
@@ -414,6 +487,7 @@ class TestRegenerarPosicaoWorker:
 
         assert alvo.status == "validation_failed", "nao pode ser sobrescrito por generation_failed"
         db.delete.assert_not_awaited()
+        assert _deletes_de_anteriores(db) == [], "QA reprovado nao apaga a anterior"
         db.commit.assert_awaited()
         assert result["status"] == "validation_failed"
 
@@ -473,6 +547,7 @@ class TestRegenerarPosicaoWorker:
         gerar.assert_not_awaited()
         assert db.execute.await_count == 1
         db.delete.assert_not_awaited()
+        assert _deletes_de_anteriores(db) == []
 
     @pytest.mark.asyncio
     async def test_placeholder_inexistente_e_skipped(self):
@@ -492,6 +567,7 @@ class TestRegenerarPosicaoWorker:
         assert result["skipped"] is True
         gerar.assert_not_awaited()
         db.delete.assert_awaited_once_with(alvo)
+        assert _deletes_de_anteriores(db) == [], "nenhuma anterior e' apagada aqui"
         db.commit.assert_awaited_once()
         assert listing.status == "generating_description", "o worker nao toca no status"
 
