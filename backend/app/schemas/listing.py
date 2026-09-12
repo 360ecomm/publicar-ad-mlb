@@ -94,6 +94,10 @@ class AttributeOut(BaseModel):
     value_name: Optional[str]
     source: str
     allowed_values: Optional[list[Any]]
+    # Tags do ML como vieram; `is_editable` e' a propriedade do model
+    # (`ListingAttribute.is_editable`), lida pelo `from_attributes`.
+    tags: Optional[dict[str, Any]] = None
+    is_editable: bool = True
 
     model_config = {"from_attributes": True}
 

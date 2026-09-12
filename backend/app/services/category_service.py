@@ -233,7 +233,10 @@ class CategoryService:
 
         for attr in raw_attrs:
             attr_id: str = attr["id"]
-            tags = attr.get("tags", {})
+            # `tags` cru vai para a linha (coluna JSONB); aqui usamos so
+            # `required`/`conditional_required` para `is_required`.
+            tags_ml = attr.get("tags")
+            tags = tags_ml or {}
             condicional = bool(tags.get("conditional_required", False))
             if attr_id == "EMPTY_GTIN_REASON" and condicional and gtin_preenchido:
                 condicional = False
@@ -348,6 +351,7 @@ class CategoryService:
                 value_name=value_name,
                 source=origem,
                 allowed_values=allowed,
+                tags=tags_ml,
             ))
 
         listing.status = "pending_seller_attributes" if has_unfilled_required else "pending_description"

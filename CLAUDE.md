@@ -376,7 +376,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `product.py` — Product (sku, description, brand, **model**, ean, ncm, fiscal, físico, custo)
 - `listing.py` — Listing (sku_external_id, sku_description, sku_brand, **sku_model**, price, status, ...)
 - `listing_title.py` — ListingTitle
-- `listing_attribute.py` — ListingAttribute (allowed_values JSONB, is_required, source)
+- `listing_attribute.py` — ListingAttribute (allowed_values JSONB, is_required, source, **`tags` JSONB** com o dicionário de tags do ML inteiro) + propriedade **`is_editable`** (`False` só com `hidden` ou `read_only`; `tags` nulo = editável, na dúvida mostrar; `fixed` fora da regra por decisão pendente) — a única definição, o frontend não reimplementa
 - `listing_image.py` — ListingImage (ml_picture_id, approved, sort_order, kind, validation_error) + propriedade `is_candidate` (`sort_order >= CANDIDATE_SORT_ORDER_FLOOR`), a única definição de candidata
 - `listing_review_event.py` — ListingReviewEvent (listing_id, user_id, action, mode, approved_count, review_seconds, created_at) — 1 linha por aprovação humana de imagens, imutável (sem `updated_at`). Apaga junto com o listing (FK `ON DELETE CASCADE` + `cascade="all, delete-orphan"` em `Listing.review_events`); `user_id` não cascateia
 - `listing_description.py` — ListingDescription
@@ -417,6 +417,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 
 ### backend/app/schemas/
 - `listing.py` — `ImageOut` (`id`, `ml_picture_id`, `status`, `approved`, `sort_order`, `kind`, `is_candidate`, `validation_error`): o que `GET /listings/{id}` devolve por imagem. **`is_candidate` é calculado no backend** (`ListingImage.is_candidate`); o frontend consome o booleano e **não** reimplementa a comparação de `sort_order`. `validation_error` é o motivo quando `status = validation_failed`. Espelho TS em `frontend/src/types/listing.ts`
+- `listing.py` — `AttributeOut` também devolve `tags` (dicionário do ML como veio) e `is_editable` (lido da propriedade do model via `from_attributes`). Espelho TS em `frontend/src/types/listing.ts`; **nenhuma tela filtra por isso ainda** (bloco B)
 
 ### backend/app/workers/tasks/
 - `ai_tasks.py` — `generate_title`, `generate_description`
@@ -456,8 +457,10 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_status_counts_rota.py` — sem banco (sempre roda): `GET /listings/status-counts` declarada antes de `GET /{listing_id}` (ordem de rota do FastAPI) e `LISTING_STATUSES` com 16 chaves sem repetição (2)
 - `test_listagem_em_escala.py` — Postgres real (só com `TEST_DATABASE_URL`): `TestContagemPorStatus` — `count_by_status` agrega em UMA consulta e sempre devolve as 16 chaves, zero quando vazio, status legado aparece e entra no total (3); `TestFiltroPorVariosStatus` — `?status=` repetido junta os grupos, string única continua igual a hoje, lista vazia/None não filtra (6); `TestBusca` — `ilike` sobre SKU/título/`sku_description`/marca/mlb_id (a descrição casa mesmo sem título escolhido), combinada com filtro de status, isolamento por seller (9); `TestPaginacao` — com filtro de status, com busca e sem duplicata/lacuna quando `created_at` empata (batch import, prova o desempate por `id` em `order_by`) (3); `TestParametroStatusNaRota` — `status` repetido e `search` na rota real, `status-counts` não cai no path param (4) (25)
 - `test_migracao_indice_listagem.py` — migração `d4e8b2a6f9c1`: `TestIndiceListagemEmEscala` (Postgres real, só com `TEST_DATABASE_URL`) — downgrade remove/upgrade recria o índice composto, índice cobre `(seller_id, status, created_at DESC)` (2); `test_revisao_encadeia_no_head_atual` — sem banco, prova que a migração encadeia no head (1) (3)
+- `test_atributos_tags_ml.py` — `is_editable` (hidden/read_only → False; nulo, `{}`, só `required`, `fixed` → True) (6); `_save_attributes` grava o dicionário de tags cru (NULL quando o ML não manda) e `is_required` continua igual (4); `AttributeOut` expõe `tags`/`is_editable` (2); `GET /listings/{id}` traz os dois por atributo (Postgres real) (1) (13)
+- `test_migracao_tags_atributos.py` — migração `e5f9c3b7a2d4`: encadeia no head (sem banco) (1); downgrade remove / upgrade recria a coluna JSONB nullable (Postgres real) (1) (2)
 
-> Suíte completa: **458 passed, 48 skipped** sem `TEST_DATABASE_URL`; **506 passed** com ela (2026-09-11). Os pulados são os testes
+> Suíte completa: **471 passed, 50 skipped** sem `TEST_DATABASE_URL`; **521 passed** com ela (2026-09-12). Os pulados são os testes
 > com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py` — e a corrida real de
 > `test_promocao_indice_unico.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
@@ -479,7 +482,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `9f4c2b7e1d63` — kind `presentation` → `presentation_ai` em `listing_images` (só dados, sem mudança de schema)
 - `b3e7a1c9d5f2` — cria `listing_review_events` (FK de `listing_id` com `ON DELETE CASCADE`)
 - `c8d2f6a4e1b7` — drop de `listing_images.review_seconds` (o tempo de revisão vive só no evento)
-- `d4e8b2a6f9c1` — índice composto `ix_listings_seller_status_created` (seller_id, status, created_at DESC) (head atual)
+- `d4e8b2a6f9c1` — índice composto `ix_listings_seller_status_created` (seller_id, status, created_at DESC)
+- `e5f9c3b7a2d4` — `listing_attributes.tags` (JSONB nullable, sem preenchimento retroativo: linhas antigas ficam NULL = editáveis) (head atual)
 
 ---
 

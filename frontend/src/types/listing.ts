@@ -48,6 +48,10 @@ export interface AttributeOut {
   value_name: string | null
   source: string
   allowed_values: { id: string; name: string }[] | null
+  /** Tags do ML como vieram (hidden, read_only, fixed, required...). */
+  tags: Record<string, boolean> | null
+  /** Calculado no backend (ListingAttribute.is_editable): nao reimplementar. */
+  is_editable: boolean
 }
 
 export interface ImageOut {

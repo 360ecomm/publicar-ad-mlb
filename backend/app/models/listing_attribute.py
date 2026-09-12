@@ -21,8 +21,24 @@ class ListingAttribute(Base):
     is_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
     source: Mapped[str] = mapped_column(String(10), nullable=False)  # 'ai' ou 'seller'
     allowed_values: Mapped[Optional[list]] = mapped_column(JSONB)
+    # Dicionario de tags INTEIRO, como o ML devolve (`hidden`, `read_only`,
+    # `fixed`, `required`, `multivalued`...). Um campo por tag exigiria
+    # migracao a cada tag nova; o JSONB acompanha sozinho (padrao de
+    # `allowed_values`). NULL = linha anterior a coluna, nada preenchido.
+    tags: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    @property
+    def is_editable(self) -> bool:
+        """O operador deve ver/editar este atributo? `False` so quando as tags
+        trazem `hidden` ou `read_only` verdadeiros (67 dos 80 de MLB7863).
+        Unica definicao em Python — o frontend consome o booleano, nunca
+        reimplementa (mesmo principio de `ListingImage.is_candidate`).
+        Sem tags gravadas (linha antiga, NULL) e' editavel: na duvida, mostrar.
+        `fixed` NAO entra na regra por enquanto (decisao pendente)."""
+        tags = self.tags or {}
+        return not (bool(tags.get("hidden")) or bool(tags.get("read_only")))
 
     listing: Mapped["Listing"] = relationship("Listing", back_populates="attributes")
