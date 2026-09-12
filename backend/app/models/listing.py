@@ -10,6 +10,10 @@ from app.models.base import Base, TimestampMixin
 # Ordem do pipeline (mesma do `ListingStatus` do frontend). E' a lista que a
 # barra de resumo da fila usa: cada status aparece SEMPRE, com zero quando
 # nao ha anuncio, pra barra nao mudar de tamanho a cada atualizacao.
+#
+# Espelha `ListingStatus` em `frontend/src/types/listing.ts` — a coluna
+# `status` nao tem CHECK constraint no banco, entao nao ha nada que force as
+# duas listas a andarem juntas. Mudou aqui, muda la tambem, a mao.
 LISTING_STATUSES: tuple[str, ...] = (
     "draft",
     "generating_title",

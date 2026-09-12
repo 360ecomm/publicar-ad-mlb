@@ -21,6 +21,13 @@ seller. Ruling do controlador: UM indice composto
   `pg_trgm`) — fora do escopo aqui, porque a busca roda sobre o recorte ja
   reduzido por seller+status, nao sobre a tabela toda.
 
+`op.create_index` aqui roda um `CREATE INDEX` comum (sem `CONCURRENTLY`), que
+toma SHARE lock na tabela e bloqueia escritas ate terminar de construir.
+Aceitavel neste projeto porque `listings` tem ~10 linhas em producao. NAO
+copiar este padrao pra uma tabela grande: la precisaria de `CONCURRENTLY`
+rodando fora da transacao do Alembic (bloco autocommit), porque
+`CONCURRENTLY` nao pode rodar dentro de uma transacao.
+
 Revision ID: d4e8b2a6f9c1
 Revises: c8d2f6a4e1b7
 Create Date: 2026-09-11 21:00:00.000000
