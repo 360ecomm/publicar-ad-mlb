@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Plus, Columns3 } from "lucide-react"
+import { Plus } from "lucide-react"
 import { WorkQueue } from "@/components/listings/WorkQueue"
 import { Button } from "@/components/ui/button"
 
@@ -13,20 +13,12 @@ export default function ListingsPage() {
             Fila de trabalho: clique na linha para ir direto à etapa que espera ação.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button asChild variant="ghost" size="sm" title="Quadro antigo, com ações em massa (transitório)">
-            <Link href="/listings/board">
-              <Columns3 className="w-4 h-4 mr-1" />
-              Quadro
-            </Link>
-          </Button>
-          <Button asChild size="sm">
-            <Link href="/listings/new">
-              <Plus className="w-4 h-4 mr-1" />
-              Novo anúncio
-            </Link>
-          </Button>
-        </div>
+        <Button asChild size="sm">
+          <Link href="/listings/new">
+            <Plus className="w-4 h-4 mr-1" />
+            Novo anúncio
+          </Link>
+        </Button>
       </div>
       <WorkQueue />
     </div>

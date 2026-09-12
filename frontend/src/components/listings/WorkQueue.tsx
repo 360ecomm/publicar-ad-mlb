@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
@@ -20,6 +20,9 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { ListingStatusBadge } from "./ListingStatusBadge"
 import { StatusSummaryBar, type QueueFilter } from "./StatusSummaryBar"
+import { BulkActionsBar, type SelectedListing } from "./BulkActionsBar"
+import { BulkResultPanel, type BulkOutcome } from "./BulkResultPanel"
+import type { BulkSummary } from "@/lib/bulk-actions"
 
 const PAGE_SIZE = 50
 const SEARCH_DELAY_MS = 300
@@ -32,7 +35,17 @@ function failedStepLabel(step: string | null | undefined): string {
   return step in STATUS_LABELS ? STATUS_LABELS[step as ListingStatus] : step.replace(/_/g, " ")
 }
 
-function QueueRow({ listing, index }: { listing: ListingSummary; index: number }) {
+function QueueRow({
+  listing,
+  index,
+  selected,
+  onToggle,
+}: {
+  listing: ListingSummary
+  index: number
+  selected: boolean
+  onToggle: (listing: ListingSummary) => void
+}) {
   const router = useRouter()
   const destination = destinationFor(listing.id, listing.status)
   const detailHref = `/listings/${listing.id}`
@@ -56,6 +69,17 @@ function QueueRow({ listing, index }: { listing: ListingSummary; index: number }
       tabIndex={0}
       title={destination.label}
     >
+      <td className="px-3 py-2.5 w-8" onClick={(e) => e.stopPropagation()}>
+        {/* A caixa seleciona; só o clique na linha navega. */}
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggle(listing)}
+          onKeyDown={(e) => e.stopPropagation()}
+          className="h-4 w-4 rounded border-slate-300 cursor-pointer"
+          aria-label={`Selecionar ${listing.sku_external_id ?? listing.id}`}
+        />
+      </td>
       <td className="px-4 py-2.5 font-mono text-xs whitespace-nowrap">
         <Link
           href={detailHref}
@@ -141,6 +165,11 @@ export function WorkQueue() {
   const [page, setPage] = useState(1)
   const debouncedSearch = useDebouncedValue(search.trim(), SEARCH_DELAY_MS)
 
+  // Seleção em estado próprio (Map id -> snapshot): sobrevive à paginação e
+  // ao filtro. Derivar da página perderia trabalho ao ir para a página 2.
+  const [selection, setSelection] = useState<Map<string, SelectedListing>>(new Map())
+  const [outcome, setOutcome] = useState<BulkOutcome | null>(null)
+
   // Contagens sempre do banco, nunca do que está carregado na página.
   const countsQuery = useQuery({
     queryKey: ["listings", "status-counts", activeSeller?.id],
@@ -196,6 +225,41 @@ export function WorkQueue() {
     void listQuery.refetch()
   }
 
+  const toSelected = (l: ListingSummary): SelectedListing => ({
+    id: l.id,
+    sku: l.sku_external_id,
+    status: l.status,
+  })
+  const toggleOne = useCallback((l: ListingSummary) => {
+    setSelection((prev) => {
+      const next = new Map(prev)
+      if (next.has(l.id)) next.delete(l.id)
+      else next.set(l.id, toSelected(l))
+      return next
+    })
+  }, [])
+  /** Cabeçalho: marca a página visível inteira; se já está toda marcada, desmarca só ela. */
+  const togglePage = (items: ListingSummary[]) => {
+    setSelection((prev) => {
+      const next = new Map(prev)
+      const allSelected = items.every((l) => next.has(l.id))
+      for (const l of items) {
+        if (allSelected) next.delete(l.id)
+        else next.set(l.id, toSelected(l))
+      }
+      return next
+    })
+  }
+  const clearSelection = () => setSelection(new Map())
+  const onBulkDone = (summary: BulkSummary, actionLabel: string) => {
+    for (const f of summary.failures) {
+      if (f.technical) console.error(`[bulk] ${actionLabel} — ${f.sku} (${f.listing_id}):`, f.raw)
+    }
+    setOutcome({ actionLabel, summary })
+    clearSelection()
+    refreshAll()
+  }
+
   if (isSellerLoading) {
     return (
       <CenteredMessage>
@@ -237,9 +301,14 @@ export function WorkQueue() {
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
   const hasFilter = filterStatuses.length > 0 || debouncedSearch !== ""
   const isRefreshing = listQuery.isFetching || countsQuery.isFetching
+  const pageItems = data?.items ?? []
+  const allPageSelected = pageItems.length > 0 && pageItems.every((l) => selection.has(l.id))
+  const offPageCount = Array.from(selection.keys()).filter(
+    (id) => !pageItems.some((l) => l.id === id)
+  ).length
 
   return (
-    <div>
+    <div className={selection.size > 0 ? "pb-24" : ""}>
       <StatusSummaryBar
         summary={summary}
         isLoading={countsQuery.isLoading}
@@ -273,6 +342,8 @@ export function WorkQueue() {
           Atualizar
         </Button>
       </div>
+
+      {outcome && <BulkResultPanel outcome={outcome} onDismiss={() => setOutcome(null)} />}
 
       {listQuery.isLoading ? (
         <div className="flex items-center justify-center h-48">
@@ -314,6 +385,16 @@ export function WorkQueue() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border text-muted-foreground text-xs uppercase tracking-wide">
+                      <th className="px-3 py-3 w-8">
+                        <input
+                          type="checkbox"
+                          checked={allPageSelected}
+                          onChange={() => togglePage(pageItems)}
+                          className="h-4 w-4 rounded border-slate-300 cursor-pointer"
+                          aria-label="Selecionar a página visível"
+                          title="Marca ou desmarca a página visível"
+                        />
+                      </th>
                       <th className="text-left px-4 py-3 font-medium whitespace-nowrap">SKU</th>
                       <th className="text-left px-4 py-3 font-medium">Título</th>
                       <th className="text-left px-4 py-3 font-medium whitespace-nowrap">Categoria</th>
@@ -326,7 +407,13 @@ export function WorkQueue() {
                   </thead>
                   <tbody>
                     {data.items.map((listing, i) => (
-                      <QueueRow key={listing.id} listing={listing} index={i} />
+                      <QueueRow
+                        key={listing.id}
+                        listing={listing}
+                        index={i}
+                        selected={selection.has(listing.id)}
+                        onToggle={toggleOne}
+                      />
                     ))}
                   </tbody>
                 </table>
@@ -365,6 +452,13 @@ export function WorkQueue() {
           </div>
         </>
       )}
+
+      <BulkActionsBar
+        selected={Array.from(selection.values())}
+        offPageCount={offPageCount}
+        onClear={clearSelection}
+        onDone={onBulkDone}
+      />
     </div>
   )
 }

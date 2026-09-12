@@ -2,160 +2,184 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import { AlertTriangle, Loader2, X } from "lucide-react"
 import {
-  bulkStartPipeline,
-  bulkApproveTitles,
-  bulkRejectTitles,
   bulkApproveImages,
+  bulkApproveTitles,
   bulkGenerateImages,
   bulkPublish,
+  bulkRejectTitles,
+  bulkStartPipeline,
 } from "@/lib/api/listings"
-import type { BulkResult } from "@/types/listing"
-import { CheckCircle, XCircle, Loader2, X } from "lucide-react"
+import { bulkAvailabilityFor, summarizeBulkResult, type BulkActionId, type BulkActionSpec, type BulkSummary } from "@/lib/bulk-actions"
+import { STATUS_LABELS, type BulkResult, type ListingStatus } from "@/types/listing"
+import { Button } from "@/components/ui/button"
 
-type ColumnId = "fila" | "titulos" | "categoria" | "imagens" | "descricao" | "publicados"
+/** O que a fila guarda de cada selecionado: sobrevive à paginação e ao filtro. */
+export interface SelectedListing {
+  id: string
+  sku: string | null
+  status: ListingStatus
+}
 
-interface BulkActionsBarProps {
-  selectedIds: string[]
-  activeColumnId: ColumnId | null
-  onSuccess: () => void
+interface Props {
+  selected: SelectedListing[]
+  /** Quantos selecionados não estão na página visível. */
+  offPageCount: number
   onClear: () => void
+  /** Chamado depois de qualquer ação em massa, com o resumo já saneado. */
+  onDone: (summary: BulkSummary, actionLabel: string) => void
 }
 
-function useToast() {
-  const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null)
-  const show = (text: string, type: "success" | "error") => {
-    setMessage({ text, type })
-    setTimeout(() => setMessage(null), 4000)
-  }
-  return { message, show }
+const RUNNERS: Record<Exclude<BulkActionId, "fill_attributes">, (ids: string[]) => Promise<BulkResult>> = {
+  start_pipeline: bulkStartPipeline,
+  approve_titles: bulkApproveTitles,
+  reject_titles: bulkRejectTitles,
+  generate_images: bulkGenerateImages,
+  approve_images: bulkApproveImages,
+  publish: bulkPublish,
 }
 
-export function BulkActionsBar({ selectedIds, activeColumnId, onSuccess, onClear }: BulkActionsBarProps) {
+const TONE_CLASS = {
+  primary: "bg-green-600 hover:bg-green-500 text-white",
+  danger: "bg-red-600 hover:bg-red-500 text-white",
+  neutral: "bg-slate-600 hover:bg-slate-500 text-white",
+} as const
+
+export function BulkActionsBar({ selected, offPageCount, onClear, onDone }: Props) {
   const router = useRouter()
-  const { message, show } = useToast()
   const [loading, setLoading] = useState(false)
+  const [confirming, setConfirming] = useState<BulkActionSpec | null>(null)
 
-  if (selectedIds.length === 0) return null
+  if (selected.length === 0) return null
 
-  const run = async (fn: (ids: string[]) => Promise<BulkResult>, successLabel: string) => {
+  const availability = bulkAvailabilityFor(selected.map((s) => s.status))
+  const skuOf = (id: string) => selected.find((s) => s.id === id)?.sku
+
+  const execute = async (action: BulkActionSpec) => {
+    if (action.href) {
+      router.push(action.href)
+      return
+    }
+    setConfirming(null)
     setLoading(true)
     try {
-      const result = await fn(selectedIds)
-      if (result.failed === 0) {
-        show(`${successLabel}: ${result.processed} processados`, "success")
-      } else {
-        show(`${result.processed} ok, ${result.failed} com erro`, "error")
-      }
-      onSuccess()
-    } catch {
-      show("Erro inesperado. Tente novamente.", "error")
+      const result = await RUNNERS[action.id as Exclude<BulkActionId, "fill_attributes">](selected.map((s) => s.id))
+      onDone(summarizeBulkResult(result, skuOf), action.label)
+    } catch (err) {
+      console.error("[bulk] falha na chamada em massa", action.id, err)
+      onDone(
+        {
+          ok: 0,
+          failed: selected.length,
+          failures: selected.map((s) => ({
+            listing_id: s.id,
+            sku: s.sku || s.id,
+            message: "a chamada em massa falhou antes de processar os itens; tente de novo",
+            technical: true,
+            raw: err instanceof Error ? err.message : String(err),
+          })),
+        },
+        action.label
+      )
     } finally {
       setLoading(false)
     }
   }
 
-  const columnLabel: Record<ColumnId, string> = {
-    fila: "Fila",
-    titulos: "Títulos",
-    categoria: "Categoria & Atributos",
-    imagens: "Imagens",
-    descricao: "Descrição",
-    publicados: "Publicados",
+  const onAction = (action: BulkActionSpec) => {
+    if (action.confirm) setConfirming(action)
+    else void execute(action)
   }
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center pb-4 pointer-events-none">
-      <div className="pointer-events-auto bg-slate-900 text-white rounded-xl shadow-2xl px-5 py-3 flex items-center gap-4 min-w-[400px] max-w-xl">
-        <div className="flex-1 text-sm">
-          <span className="font-semibold">{selectedIds.length}</span>
-          <span className="text-slate-300 ml-1">
-            {selectedIds.length === 1 ? "anúncio selecionado" : "anúncios selecionados"}
-            {activeColumnId && ` em ${columnLabel[activeColumnId]}`}
-          </span>
+      <div className="pointer-events-auto bg-slate-900 text-white rounded-xl shadow-2xl px-5 py-3 flex items-center gap-4 min-w-[420px] max-w-3xl">
+        <div className="flex-1 text-sm leading-tight">
+          <div>
+            <span className="font-semibold">{selected.length}</span>{" "}
+            <span className="text-slate-300">
+              {selected.length === 1 ? "anúncio selecionado" : "anúncios selecionados"}
+            </span>
+            {availability.kind === "actions" || availability.kind === "none" ? (
+              <span className="text-slate-400 ml-1">· {STATUS_LABELS[availability.status]}</span>
+            ) : null}
+          </div>
+          {offPageCount > 0 && (
+            <div className="text-xs text-slate-400">
+              {offPageCount} {offPageCount === 1 ? "está" : "estão"} fora da página visível
+            </div>
+          )}
+          {availability.kind === "mixed" && (
+            <div className="text-xs text-amber-300 flex items-center gap-1 mt-0.5">
+              <AlertTriangle className="w-3 h-3" />
+              Selecione anúncios no mesmo estágio para agir em massa
+              <span className="text-slate-400">
+                ({availability.statuses.map((s) => STATUS_LABELS[s]).join(", ")})
+              </span>
+            </div>
+          )}
+          {availability.kind === "none" && (
+            <div className="text-xs text-slate-400 mt-0.5">Nenhuma ação em massa para este estágio</div>
+          )}
         </div>
 
         {loading && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
 
-        {!loading && activeColumnId === "fila" && (
-          <button
-            onClick={() => run(bulkStartPipeline, "Pipeline iniciado")}
-            className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
-          >
-            <CheckCircle className="w-4 h-4" /> Iniciar pipeline
-          </button>
-        )}
-
-        {!loading && activeColumnId === "titulos" && (
-          <>
+        {!loading &&
+          availability.kind === "actions" &&
+          availability.actions.map((action) => (
             <button
-              onClick={() => run(bulkRejectTitles, "Títulos reprovados")}
-              className="flex items-center gap-1.5 bg-red-600 hover:bg-red-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
+              key={action.id}
+              type="button"
+              onClick={() => onAction(action)}
+              className={`text-sm font-medium px-3 py-1.5 rounded-lg transition-colors ${TONE_CLASS[action.tone]}`}
             >
-              <XCircle className="w-4 h-4" /> Reprovar
+              {action.label}
             </button>
-            <button
-              onClick={() => run(bulkApproveTitles, "Títulos aprovados")}
-              className="flex items-center gap-1.5 bg-green-600 hover:bg-green-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <CheckCircle className="w-4 h-4" /> Aprovar títulos
-            </button>
-          </>
-        )}
-
-        {!loading && activeColumnId === "categoria" && (
-          <>
-            <button
-              onClick={() => {
-                router.push("/listings/attributes")
-              }}
-              className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
-            >
-              Preencher atributos
-            </button>
-            <button
-              onClick={() => run(bulkGenerateImages, "Imagens iniciadas")}
-              className="flex items-center gap-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <CheckCircle className="w-4 h-4" /> Gerar imagens
-            </button>
-          </>
-        )}
-
-        {!loading && activeColumnId === "imagens" && (
-          <button
-            onClick={() => run(bulkApproveImages, "Imagens aprovadas")}
-            className="flex items-center gap-1.5 bg-green-600 hover:bg-green-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
-          >
-            <CheckCircle className="w-4 h-4" /> Aprovar imagens
-          </button>
-        )}
-
-        {!loading && activeColumnId === "descricao" && (
-          <button
-            onClick={() => run(bulkPublish, "Publicação iniciada")}
-            className="flex items-center gap-1.5 bg-green-600 hover:bg-green-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
-          >
-            <CheckCircle className="w-4 h-4" /> Publicar
-          </button>
-        )}
+          ))}
 
         <button
+          type="button"
           onClick={onClear}
-          className="text-slate-400 hover:text-white transition-colors ml-1"
+          disabled={loading}
+          className="text-slate-400 hover:text-white transition-colors ml-1 disabled:opacity-50"
           title="Cancelar seleção"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      {message && (
+      {confirming && (
         <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm font-medium text-white shadow-lg ${
-            message.type === "success" ? "bg-green-700" : "bg-red-700"
-          }`}
+          className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-confirm-title"
         >
-          {message.text}
+          <div className="bg-card text-foreground rounded-xl shadow-2xl border border-border max-w-md w-full p-5">
+            <h2 id="bulk-confirm-title" className="text-base font-semibold">
+              Publicar {selected.length} {selected.length === 1 ? "anúncio" : "anúncios"} no Mercado Livre?
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              A publicação é irreversível: o anúncio vai ao ar na conta conectada.
+            </p>
+            <ul className="mt-3 max-h-48 overflow-y-auto rounded border border-border divide-y divide-border text-sm">
+              {selected.map((s) => (
+                <li key={s.id} className="px-3 py-1.5 font-mono text-xs">
+                  {s.sku || s.id}
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" size="sm" onClick={() => setConfirming(null)}>
+                Cancelar
+              </Button>
+              <Button size="sm" onClick={() => void execute(confirming)}>
+                Publicar {selected.length}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>
