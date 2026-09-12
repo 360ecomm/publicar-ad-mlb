@@ -418,6 +418,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 ### backend/app/schemas/
 - `listing.py` — `ImageOut` (`id`, `ml_picture_id`, `status`, `approved`, `sort_order`, `kind`, `is_candidate`, `validation_error`): o que `GET /listings/{id}` devolve por imagem. **`is_candidate` é calculado no backend** (`ListingImage.is_candidate`); o frontend consome o booleano e **não** reimplementa a comparação de `sort_order`. `validation_error` é o motivo quando `status = validation_failed`. Espelho TS em `frontend/src/types/listing.ts`
 - `listing.py` — `AttributeOut` também devolve `tags` (dicionário do ML como veio) e `is_editable` (lido da propriedade do model via `from_attributes`). Espelho TS em `frontend/src/types/listing.ts`; **nenhuma tela filtra por isso ainda** (bloco B)
+- `listing.py` — `ListingSummary` (o item de `GET /listings` e o retorno dos endpoints de ação) passou a trazer **`sku_description`** (a fila mostra no lugar do título quando `selected_title` é `NULL`), **`ml_category_id`** (coluna Categoria da fila; o caminho completo é da tela de revisão) e **`approved_image_count`** (marca "Incompleto (n/5)" quando 0 < n < 5; zero é "ainda não revisado"). `ListingDetail` **herda** os três de `ListingSummary` em vez de redeclarar: a contagem já vem na linha do listing, sem consulta extra, e a lista `images` do detalhe é quem detalha. Espelho TS em `frontend/src/types/listing.ts`
 
 ### backend/app/workers/tasks/
 - `ai_tasks.py` — `generate_title`, `generate_description`
