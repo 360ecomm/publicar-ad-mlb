@@ -67,11 +67,13 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
       if (primedRef.current && lastActiveIdRef.current !== nextId) {
         void queryClient.resetQueries()
       }
-      primedRef.current = true
       lastActiveIdRef.current = nextId
     } catch {
       // Sem token o layout já redireciona para /login; não propaga.
     } finally {
+      // `primedRef` marca "já rodou", não "rodou com sucesso": mesmo se a
+      // primeira chamada falhar, a próxima com sucesso reseta o cache.
+      primedRef.current = true
       setIsLoading(false)
     }
   }, [queryClient])
@@ -89,6 +91,10 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY || e.key === null) {
+        // Escrita de mesmo valor não deve custar um `listSellers()` por aba:
+        // o `persist` de cada `load` reescreve o mesmo id; um navegador que
+        // transmita essa escrita faria as abas se revezarem sem fim.
+        if (e.newValue === lastActiveIdRef.current) return
         void load()
       }
     }

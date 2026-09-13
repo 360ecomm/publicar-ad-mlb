@@ -177,8 +177,7 @@ export default function ContasPage() {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [confirming])
+  }, [confirming, disconnectMutation.isPending])
 
   return (
     <div>

@@ -508,7 +508,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 > real ao total de pulados; a figura anterior de **550 passed, 69 skipped** já
 > estava desatualizada antes mesmo desta branch começar — a base dela media
 > **554 passed, 74 skipped** sem `TEST_DATABASE_URL`. Esta branch soma **8
-> passed** sem banco (mais **8 skipped**) e **100** com banco. Baseline
+> passed** sem banco (mais **8 skipped**) e **16** com banco. Baseline
 > anterior à branch `feat/regenerar-posicao`: **482 passed, 56
 > skipped** sem `TEST_DATABASE_URL`; **538 passed** com ela. Os pulados sem
 > `TEST_DATABASE_URL` são os testes com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py`, `test_migracao_indice_regeneracao.py` e `test_migracao_tokens_anulaveis.py` — e a corrida real de
