@@ -1,0 +1,81 @@
+# Imagem de producao do frontend (Next.js 14, App Router).
+#
+# Build multi-stage no mesmo espirito do backend/Dockerfile.prod: o estagio
+# `deps` instala as dependencias, o `builder` roda o `next build` e o estagio
+# final recebe SO o pacote `standalone` que o Next gera por causa de
+# `output: "standalone"` (next.config.mjs) — o server.js, o pedaco de
+# node_modules que ele realmente importa em runtime e os assets estaticos.
+# Nem o toolchain do build nem os node_modules de desenvolvimento (typescript,
+# eslint, tailwind, @types/*) chegam na imagem que roda em producao.
+#
+# Servidor: `node server.js` do standalone, sem `next start`. O `next start`
+# exige o pacote `next` inteiro instalado; o standalone ja embute o servidor.
+#
+# Linha do Node: 24 (Krypton). E a versao em que o projeto e desenvolvido e
+# testado; LTS desde 2025-10-28, manutencao a partir de 2026-10-20 e fim de
+# suporte em 2028-04-30 (schedule.json de nodejs/Release). O Next 14.2 pede
+# >= 18.17; o 20 saiu de suporte em 2026-04-30 e o 22 termina em 2027-04-30.
+# Alpine: imagem menor, e nao ha dependencia nativa aqui — o projeto nao usa
+# next/image, entao nem `sharp` e necessario.
+
+# ─────────────────────────── Estagio 1: deps ────────────────────────────
+FROM node:24-alpine AS deps
+
+WORKDIR /build
+# So os manifests: a camada de dependencias fica em cache enquanto o
+# package-lock nao mudar, mesmo que o codigo mude.
+COPY package.json package-lock.json ./
+# `npm ci` instala EXATAMENTE o lockfile e falha se package.json e lock
+# divergirem — build reprodutivel, sem resolver versao no servidor.
+RUN npm ci
+
+# ─────────────────────────── Estagio 2: build ───────────────────────────
+FROM node:24-alpine AS builder
+
+WORKDIR /build
+COPY --from=deps /build/node_modules ./node_modules
+COPY . .
+
+# URL da API assada no bundle. O Next inlina `process.env.NEXT_PUBLIC_*` em
+# tempo de BUILD, nao de execucao: mudar a variavel no compose depois de
+# construida a imagem nao muda nada. Vazia de proposito: com `??` nos clientes
+# de API (src/lib/api/*.ts), string vazia produz chamada RELATIVA
+# (`/api/v1/...`), que e o que o mesmo dominio exige — o Nginx roteia `/api`
+# para o backend. O `.dockerignore` barra o `.env.local` de dev para ele nem
+# entrar no contexto com `http://localhost:8001`.
+ENV NEXT_PUBLIC_API_URL="" \
+    NEXT_TELEMETRY_DISABLED=1
+
+RUN npm run build
+
+# ────────────────────────── Estagio 3: runtime ──────────────────────────
+FROM node:24-alpine AS runtime
+
+# O server.js do standalone escuta em HOSTNAME:PORT. 0.0.0.0 para o `ports:`
+# do compose alcancar o processo; preso em localhost dentro do container,
+# ninguem de fora chega.
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000
+
+# Usuario non-root fixo, mesmo UID do backend (10001) por consistencia. A
+# imagem node:alpine ja traz um usuario `node` (uid 1000), mas 1000 e o uid
+# tipico do primeiro usuario do host — colidiria num volume montado.
+RUN addgroup -g 10001 -S appuser \
+    && adduser -S -u 10001 -G appuser -s /sbin/nologin appuser
+
+WORKDIR /app
+
+# So o standalone atravessa. `.next/static` vai a parte porque o Next NAO o
+# inclui no standalone de proposito (assume que um CDN serve os assets);
+# aqui quem serve e o proprio server.js. Nao ha `public/` neste projeto — se
+# um dia houver, precisa de um COPY proprio, pela mesma razao.
+COPY --from=builder --chown=appuser:appuser /build/.next/standalone ./
+COPY --from=builder --chown=appuser:appuser /build/.next/static ./.next/static
+
+USER appuser
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

@@ -5,8 +5,9 @@
 #   - imagem construida com Dockerfile.prod (multi-stage, non-root)
 #   - nenhum bind mount de codigo: o que roda e o que foi assado na imagem
 #   - postgres e redis SEM `ports:` — alcancaveis so pela rede interna
-#   - backend publicado apenas em 127.0.0.1, para o Nginx do host fazer proxy
-#   - sem pgadmin e sem frontend
+#   - backend e frontend publicados apenas em 127.0.0.1, para o Nginx do host
+#     fazer proxy (mesmo dominio: `/api` -> backend, o resto -> frontend)
+#   - sem pgadmin
 #
 # CUIDADO com o nome do projeto. O Compose deriva o nome do diretorio, que e o
 # MESMO para este arquivo e para o de dev. Rodar sem `-p` na maquina de
@@ -29,7 +30,8 @@
 #
 # Os valores saem de medicao real dos containers ociosos (backend 141MiB,
 # worker 131MiB, beat 42MiB, postgres 39MiB, redis 12MiB), com folga para o
-# pico. Teto somado: 2.4Gi, deixando ~3.8Gi livres na VPS.
+# pico. Teto somado: 2.9Gi (2.4Gi do backend e infra + 512M do frontend, desde
+# 2026-09-13), deixando ~3.3Gi livres na VPS.
 #
 # Subir:
 #   docker compose -f docker-compose.prod.yml up -d --build
@@ -180,6 +182,33 @@ services:
       # caminho precisa pertencer ao appuser — /app e do root na imagem.
       - celerybeat_data_prod:/home/appuser/celerybeat
     command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/home/appuser/celerybeat/celerybeat-schedule
+
+  # ── Frontend (Next.js) ───────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    # Loopback, mesma razao do backend. 8011 fica ao lado do 8010: os dois
+    # servicos deste projeto sao vizinhos no mesmo vhost (o Nginx manda `/api`
+    # para 8010 e o resto para 8011). Livre na VPS em 2026-09-13; em uso no
+    # loopback naquela data: 3005 e 3006 (apps de outro cliente), 3306, 5432,
+    # 8010.
+    ports:
+      - "127.0.0.1:8011:3000"
+    # 512M. Medido em 2026-09-13 na maquina de dev, imagem identica: 61MiB
+    # ocioso, 64MiB depois de 50 requests em /login. E ~8x de folga para pico
+    # de SSR — deliberadamente generoso porque e o primeiro servico Node da
+    # stack e nao ha medicao em producao ainda; apertar depois de medir la.
+    # O `next build` NAO conta aqui: roda no `docker build`, fora de qualquer
+    # mem_limit, com pico de 1-2GiB — a VPS tinha 6.5Gi disponiveis na medicao.
+    mem_limit: 512m
+    # Sem `env_file`: o frontend nao tem segredo nenhum e nao le o .env. A URL
+    # da API e assada no BUILD como string vazia (= chamada relativa, mesmo
+    # dominio), ver frontend/Dockerfile.prod; variavel de runtime aqui nao a
+    # mudaria.
+    depends_on:
+      - backend
 
 volumes:
   postgres_data_prod:

@@ -1,4 +1,7 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
+// `??`, nao `||`: definida como VAZIA (producao, mesmo dominio) produz chamada
+// relativa `/api/v1/...`; AUSENTE (desenvolvimento) cai no padrao local. Com
+// `||`, vazia e ausente seriam a mesma coisa e producao chamaria localhost.
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001"
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {

@@ -1,7 +1,10 @@
 import { apiFetch, withRefresh, getActiveSellerId, ApiError } from "./client"
 import type { Product, ProductPage, ProductUploadResult, ProductFormData } from "@/types/product"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
+// `??`, nao `||`: definida como VAZIA (producao, mesmo dominio) produz chamada
+// relativa `/api/v1/...`; AUSENTE (desenvolvimento) cai no padrao local. Com
+// `||`, vazia e ausente seriam a mesma coisa e producao chamaria localhost.
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001"
 
 function authHeaders(token: string | null): Record<string, string> {
   const h: Record<string, string> = {}

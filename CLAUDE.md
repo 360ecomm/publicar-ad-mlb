@@ -65,6 +65,12 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | pgadmin | 5050 | 80 |
 | frontend (Next.js) | 3000 | 3000 |
 
+> **O serviço `frontend` do `docker-compose.yml` de dev nunca funcionou.** Ele
+> referencia `frontend/Dockerfile.dev`, que não existe em nenhum commit, e traz
+> `NEXT_PUBLIC_API_URL: http://localhost:8000` (a porta do backend no host é
+> 8001). Nunca quebrou nada porque está sob `profiles: ["frontend"]`. Em dev o
+> frontend roda com `npm run dev`. Pendência registrada em 2026-09-13.
+
 > A porta do backend é 8001 (não 8000) — conflito resolvido na Fase 1.
 
 ---
@@ -104,7 +110,8 @@ cd frontend && npm run build  # checar erros TS
 | Acesso | alias SSH `vps-360` (ver `CLAUDE.md` global para as regras de SSH) |
 | Diretório do projeto | `/root/publicar-ad-mlb` (fora de qualquer `root` do Nginx) |
 | `.env` de produção | `/root/publicar-ad-mlb/.env`, `600 root:root` — gerado do zero, nada copiado do dev |
-| Porta interna | `127.0.0.1:8010` → 8000 no container. **Só loopback**; quem fala com ela é o Nginx |
+| Porta interna (backend) | `127.0.0.1:8010` → 8000 no container. **Só loopback**; quem fala com ela é o Nginx |
+| Porta interna (frontend) | `127.0.0.1:8011` → 3000 no container. Serviço `frontend` do `docker-compose.prod.yml`, imagem `frontend/Dockerfile.prod` (Node 24 alpine, multi-stage, `output: "standalone"`, non-root `appuser` uid 10001, `mem_limit: 512m`). **Ainda sem vhost**: o Nginx precisa passar a mandar `/api` para 8010 e o resto para 8011 (tarefa 2 do bloco D) |
 | Vhost | `/etc/nginx/sites-available/app.360ecomm.com.br` |
 | Certificado | Let's Encrypt via `certbot --nginx`, renovação pelo `certbot.timer` já existente |
 | Código | `git pull` via deploy key dedicada (alias SSH `github-admlb`) |
@@ -158,6 +165,13 @@ Chaves relevantes:
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL` — Cloudflare R2 legado (configurado mas não usado)
 - `R2_ASSET_BUCKET_NAME`, `R2_ASSET_BUCKET_ENDPOINT`, `R2_ASSET_BUCKET_ACCESS_KEY_ID`, `R2_ASSET_BUCKET_SECRET_ACCESS_KEY` — bucket R2 **dedicado** para as imagens geradas por IA (write-back na geração, `services/r2_asset_service.py`). Distinto do bucket de fotos brutas dos sellers. Vazio = a geração continua, mas as linhas nascem com `asset_key=None` e o log avisa. O banco **não guarda mais blob**: `ListingImage.asset_key` aponta para `{apelido_ml}/{sku}/{kind}-{AAAAMMDD-HHMMSS}-{4hex}.jpg` (ex.: `CAFE085/37/cover_ai-20260910-234512-ab12.jpg`), montado só em `asset_key_for()`
 
+- `NEXT_PUBLIC_API_URL` (frontend) — o Next **inlina em build-time**, não em
+  runtime. Os três clientes (`lib/api/client.ts`, `products.ts`, `import.ts`)
+  usam `??`, não `||`: **definida como vazia** produz chamada relativa
+  (`/api/v1/...`, produção no mesmo domínio, valor cravado pelo
+  `Dockerfile.prod`); **ausente** cai em `http://localhost:8001` (dev, onde o
+  `.env.local` também a define). Com `||` os dois casos seriam iguais e produção
+  chamaria localhost. O `frontend/.dockerignore` barra o `.env.local` do build.
 - `ENVIRONMENT` — **default inseguro**: enquanto o valor for `development`, o
   `main.py` publica `/docs` **e** `/openapi.json`. Todo ambiente que não for dev
   explícito precisa de `ENVIRONMENT=production`. O `docker-compose.prod.yml`

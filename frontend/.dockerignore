@@ -1,0 +1,32 @@
+# Contexto de build da imagem do frontend.
+#
+# `.env.local` e a linha mais importante desta lista. O Next carrega
+# `.env.local` em todo ambiente (menos test), inclusive no `next build`. Ele
+# guarda o valor de dev `NEXT_PUBLIC_API_URL=http://localhost:8001`; o
+# Dockerfile.prod define a variavel como "" antes do build e o Next nao
+# sobrescreve variavel ja definida, mas nao ha razao para deixar o arquivo
+# entrar no contexto e depender dessa ordem de precedencia.
+.env
+.env.*
+!.env.example
+
+# Regerados dentro da imagem (npm ci / next build). Copiar os do host so
+# aumentaria o contexto em centenas de MB e poderia trazer binario nativo
+# compilado para outra plataforma.
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# Metadados de repositorio e de build.
+.git/
+.gitignore
+Dockerfile
+Dockerfile.*
+.dockerignore
+README.md
+
+*.log
+.DS_Store
