@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { listSellers } from "@/lib/api/sellers"
-import { getMLConnectUrl } from "@/lib/api/auth"
+import { openMLAuthorization } from "@/lib/api/auth"
 import { getTitleConfigs, createTitleConfig, updateTitleConfig, deleteTitleConfig } from "@/lib/api/title-configs"
 import { getSellerImageConfig, upsertSellerImageConfig } from "@/lib/api/seller-image-config"
 import { useSeller } from "@/contexts/SellerContext"
@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Loader2, CheckCircle, ExternalLink, ShoppingBag, Plus, Check, Tag, Pencil, Trash2, ImageIcon } from "lucide-react"
 import { toast } from "sonner"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
 import type { TitleConfig, TitleConfigCreate, TitleConfigUpdate } from "@/types/title-config"
@@ -42,7 +42,7 @@ const EMPTY_FORM = {
 
 export default function SettingsPage() {
   const [connecting, setConnecting] = useState(false)
-  const { activeSeller, setActiveSeller } = useSeller()
+  const { activeSeller, setActiveSeller, reload } = useSeller()
 
   // --- Title Config form state ---
   const [showForm, setShowForm] = useState(false)
@@ -185,11 +185,15 @@ export default function SettingsPage() {
   const handleConnect = async () => {
     setConnecting(true)
     try {
-      const url = await getMLConnectUrl()
       // Aba nova: o operador não perde a aplicação. O callback devolve a aba
       // nova em /contas?ml_connected=true; a lista daqui refaz no foco
-      // (refetchOnWindowFocus já está ligado na query "sellers").
-      window.open(url, "_blank", "noopener")
+      // (refetchOnWindowFocus já está ligado na query "sellers"; o contexto
+      // de contas recarrega pelo efeito de foco logo abaixo). Se o pop-up
+      // for bloqueado, cai na mesma aba — avisamos antes de navegar.
+      const destino = await openMLAuthorization()
+      if (destino === "mesma-aba") {
+        toast.info("Pop-up bloqueado: abrindo a autorização nesta aba.")
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao obter URL de conexão"
       toast.error(message)
@@ -197,6 +201,15 @@ export default function SettingsPage() {
       setConnecting(false)
     }
   }
+
+  // Voltar para esta aba depois de autorizar no ML (aba nova) recarrega o
+  // contexto de contas; sem isto a barra do topo e /contas ficariam sem a
+  // conta nova até um F5 (a aba nova é outra instância do app).
+  useEffect(() => {
+    const onFocus = () => { void reload() }
+    window.addEventListener("focus", onFocus)
+    return () => window.removeEventListener("focus", onFocus)
+  }, [reload])
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">

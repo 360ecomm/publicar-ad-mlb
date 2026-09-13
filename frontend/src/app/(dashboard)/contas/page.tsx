@@ -8,7 +8,7 @@ import { formatDistanceToNow } from "date-fns"
 import { ptBR } from "date-fns/locale"
 import { Loader2, ShoppingBag, Check, ExternalLink, Plus, Unplug } from "lucide-react"
 import { getDashboard, disconnectSeller, type SellerDashboardEntry } from "@/lib/api/sellers"
-import { getMLConnectUrl } from "@/lib/api/auth"
+import { openMLAuthorization } from "@/lib/api/auth"
 import { useSeller } from "@/contexts/SellerContext"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -39,16 +39,6 @@ const STATUS_COLORS: Record<string, string> = {
   draft: "bg-slate-100 text-slate-600",
 }
 
-/**
- * Abre a autorização do ML em aba nova: o operador não perde a aplicação.
- * O callback do backend manda a aba nova para /contas?ml_connected=true;
- * esta aba recarrega a lista ao receber foco de novo (ver o efeito abaixo).
- */
-async function openMLAuthorization(): Promise<void> {
-  const url = await getMLConnectUrl()
-  window.open(url, "_blank", "noopener")
-}
-
 function SellerCard({ entry, onDisconnect }: { entry: SellerDashboardEntry; onDisconnect: (e: SellerDashboardEntry) => void }) {
   const { activeSeller, setActiveSeller, sellers } = useSeller()
   const [connecting, setConnecting] = useState(false)
@@ -56,10 +46,17 @@ function SellerCard({ entry, onDisconnect }: { entry: SellerDashboardEntry; onDi
   const seller = sellers.find((s) => s.id === entry.seller_id)
   const statusEntries = Object.entries(entry.listings_by_status).sort((a, b) => b[1] - a[1])
 
+  // Aba nova: o operador não perde a aplicação. O callback do backend manda
+  // a aba nova para /contas?ml_connected=true; esta aba recarrega a lista ao
+  // receber foco de novo (ver o efeito em ContasPage). Se o pop-up for
+  // bloqueado, cai na mesma aba — avisamos antes de navegar.
   const reconnect = async () => {
     setConnecting(true)
     try {
-      await openMLAuthorization()
+      const destino = await openMLAuthorization()
+      if (destino === "mesma-aba") {
+        toast.info("Pop-up bloqueado: abrindo a autorização nesta aba.")
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erro ao obter URL de conexão")
     } finally {
@@ -167,7 +164,10 @@ export default function ContasPage() {
   const connect = async () => {
     setConnecting(true)
     try {
-      await openMLAuthorization()
+      const destino = await openMLAuthorization()
+      if (destino === "mesma-aba") {
+        toast.info("Pop-up bloqueado: abrindo a autorização nesta aba.")
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erro ao obter URL de conexão")
     } finally {
