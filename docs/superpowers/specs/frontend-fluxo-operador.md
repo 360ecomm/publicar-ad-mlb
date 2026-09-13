@@ -42,9 +42,17 @@ Aberta a partir de uma linha da fila. Substitui a galeria atual, que foi feita p
 - Caminho completo da categoria visível na tela: é o primeiro ponto em que um erro de título/categoria pode ser pego por um humano.
 - Cronômetro: mede o tempo da revisão e envia em `review_seconds` na aprovação. Hoje o frontend não envia, e todo evento nasce com tempo nulo.
 - A ordem em que os ids são enviados é a ordem publicada no ML (ver CLAUDE.md, "A aprovação individual renumera"). A tela precisa enviar na ordem desejada.
-- Navegação por teclado entre anúncios, sem voltar à fila a cada um.
-- Botões de retomada, hoje sem nenhuma tela: `pipeline/resume_raw_photos` e `pipeline/resume_ai_engine`. A mensagem de fotos ausentes manda usar "Verificar fotos agora", e esse botão não existe.
-- A orientação de standby é montada a partir do status, nunca do `error_message` gravado: o texto gravado é uma foto do momento em que o anúncio parou e não acompanha correções.
+- Navegação entre anúncios sem voltar à fila a cada um. **Construído (parte 2, 2026-09-13)** como "próximo anúncio": ao aprovar, a tela consulta a fila **na hora** (`status=pending_image_approval`, `page_size=2`, excluindo o atual; nunca de uma lista carregada antes, que envelhece com workers rodando) e vai à revisão do próximo, com aviso curto no canto ("SKU X: n imagens aprovadas"); sem próximo, volta à fila. Atalho de teclado ficou de fora.
+- Regenerar UMA posição (**parte 2**): botão em cada posição não aprovada (reprovada no QA, falhou ao gerar, ausente), `POST .../positions/{0..4}/regenerate`. Não prende o operador: a posição vira `generating`, a tela segue usável e ele pode sair. Consulta periódica de 3 s **só enquanto houver posição `generating`**, parando sozinha. Aprovar bloqueado com o motivo escrito. Posição 2 (Benefícios) confirma antes, avisando que o texto do card pode mudar. 409/503 viram frase legível pelo rótulo da tela (`describeRegenerateError`).
+- Ver original sob demanda (**parte 2**): `GET /listings/{id}/raw-photos` buscado uma vez por anúncio e reaproveitado; três casos com texto próprio (bucket não configurado → link para Configurações; SKU sem original; as fotos), kit mostra o SKU de cada grupo.
+
+> **Retomadas NÃO ficam nesta tela.** A versão anterior deste spec listava aqui os botões de `pipeline/resume_raw_photos` e `pipeline/resume_ai_engine`. Estava errado: esses endpoints agem em anúncios parados em `pending_raw_photos` e `pending_ai_engine`, que **não têm imagens para revisar** e, pela tabela de destinos da fila, abrem no **detalhe**. Movidos para a seção 2b (2026-09-13).
+
+### 2b. Detalhe do anúncio: standbys (`/listings/[id]`)
+
+- Anúncio em `pending_raw_photos` → botão **"Verificar fotos agora"** (o texto que a mensagem de erro do backend manda o operador procurar) chamando `resume_raw_photos`; em `pending_ai_engine` → **"Tentar agora"** chamando `resume_ai_engine`. Cada botão só aparece no status correspondente.
+- A orientação exibida é **montada a partir do status** (`lib/standby-guidance.ts`), nunca do `error_message` gravado: o texto gravado é uma foto do momento em que o anúncio parou e não acompanha correções (o FAROL01 em produção ainda tem a mensagem antiga só de `.jpg`).
+- O 409 de fotos ainda ausentes vira a mensagem de negócio **calculada na hora** pelo backend (quais arquivos faltam, em quais formatos); o 409 por status que já mudou vira "recarregue"; erro técnico nunca chega cru (`describeResumeError`).
 
 ### 3. Atributos
 
