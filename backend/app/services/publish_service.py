@@ -40,7 +40,24 @@ class MLValidationError(Exception):
     """Erro de validação retornado pela API do ML (HTTP 400). Não deve ser retentado."""
 
 
+class SellerDisconnectedError(RuntimeError):
+    """Conta ML desconectada ou sem token: nao ha o que usar nem renovar.
+
+    RuntimeError de proposito: os workers ja tratam RuntimeError como falha
+    do listing (sem retry infinito), e a mensagem nomeia a conta para o
+    operador saber onde reconectar.
+    """
+
+
 async def get_valid_access_token(seller, db) -> str:
+    # Guarda ANTES de qualquer decrypt: desde b8e2d4f6a1c3 os tokens sao
+    # anulaveis (conta desconectada). Sem isto o Fernet estouraria com
+    # InvalidToken dentro de um worker — sintoma longe da causa.
+    if not seller.is_active or not seller.access_token_enc or not seller.refresh_token_enc:
+        raise SellerDisconnectedError(
+            f"Conta ML {seller.ml_nickname!r} desconectada: reconecte em Contas antes de continuar."
+        )
+
     now = datetime.now(timezone.utc)
     expires_at = seller.token_expires_at
     if expires_at.tzinfo is None:
