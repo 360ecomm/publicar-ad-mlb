@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { ShoppingBag } from "lucide-react"
 import { useSeller } from "@/contexts/SellerContext"
 
@@ -14,6 +15,10 @@ import { useSeller } from "@/contexts/SellerContext"
  */
 export function AccountBar() {
   const { connectedSellers, activeSeller, setActiveSeller, isLoading } = useSeller()
+  // A barra aparece em toda tela do painel, inclusive na própria /contas. Lá,
+  // os dois atalhos daqui apontariam para a página aberta: link que não leva
+  // a lugar nenhum é ruído, e o operador clica achando que vai acontecer algo.
+  const naPaginaDeContas = usePathname() === "/contas"
 
   return (
     <div
@@ -27,8 +32,13 @@ export function AccountBar() {
         <span className="text-slate-400">carregando…</span>
       ) : !activeSeller ? (
         <span className="text-amber-600">
-          Nenhuma conta conectada.{" "}
-          <Link href="/contas" className="underline hover:text-amber-700">Conectar conta</Link>
+          Nenhuma conta conectada.
+          {!naPaginaDeContas && (
+            <>
+              {" "}
+              <Link href="/contas" className="underline hover:text-amber-700">Conectar conta</Link>
+            </>
+          )}
         </span>
       ) : connectedSellers.length === 1 ? (
         // Uma conta só: mostra, sem menu de troca (não há para onde trocar).
@@ -49,7 +59,7 @@ export function AccountBar() {
         </select>
       )}
 
-      {activeSeller && (
+      {activeSeller && !naPaginaDeContas && (
         <Link href="/contas" className="ml-auto text-xs text-slate-500 hover:text-foreground">
           Gerenciar contas
         </Link>
