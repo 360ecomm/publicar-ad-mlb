@@ -23,6 +23,7 @@ class ListingStatusCount(BaseModel):
 class SellerDashboardEntry(BaseModel):
     seller_id: UUID
     ml_nickname: str
+    is_active: bool
     listings_by_status: dict[str, int]
     total_listings: int
     last_activity_at: datetime | None

@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -6,6 +8,7 @@ from app.models.seller import Seller
 from app.models.listing import Listing
 from app.models.user_seller_access import UserSellerAccess
 from app.schemas.seller import DashboardResponse, SellerDashboardEntry, SellerOut
+from app.services.seller_service import SellerService
 
 router = APIRouter(tags=["sellers"])
 
@@ -39,6 +42,29 @@ async def list_sellers(
     return sellers_out
 
 
+@router.post("/sellers/{seller_id}/disconnect", response_model=SellerOut)
+async def disconnect_seller(
+    seller_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desconecta a conta ML: apaga so os tokens, mantem o historico.
+
+    Nao passa por `get_active_seller` de proposito: aquela dependencia
+    recusa conta inativa, e desconectar tem que ser idempotente.
+    """
+    seller, granted_at = await SellerService(db).disconnect(seller_id, current_user.id)
+    return SellerOut(
+        id=seller.id,
+        ml_user_id=seller.ml_user_id,
+        ml_nickname=seller.ml_nickname,
+        ml_site_id=seller.ml_site_id,
+        token_expires_at=seller.token_expires_at,
+        is_active=seller.is_active,
+        granted_at=granted_at,
+    )
+
+
 @router.get("/dashboard", response_model=DashboardResponse)
 async def get_dashboard(
     current_user=Depends(get_current_user),
@@ -49,7 +75,9 @@ async def get_dashboard(
     sellers_result = await db.execute(
         select(Seller)
         .join(UserSellerAccess, UserSellerAccess.seller_id == Seller.id)
-        .where(UserSellerAccess.user_id == current_user.id, Seller.is_active == True)
+        # Inclui contas desconectadas de proposito: /contas mostra o
+        # historico delas com "Reconectar".
+        .where(UserSellerAccess.user_id == current_user.id)
         .order_by(UserSellerAccess.granted_at.asc())
     )
     sellers = sellers_result.scalars().all()
@@ -87,6 +115,7 @@ async def get_dashboard(
             SellerDashboardEntry(
                 seller_id=seller.id,
                 ml_nickname=seller.ml_nickname,
+                is_active=seller.is_active,
                 listings_by_status=by_status,
                 total_listings=sum(by_status.values()),
                 last_activity_at=activity_map.get(seller.id),
