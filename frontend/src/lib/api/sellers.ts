@@ -18,6 +18,7 @@ export interface ListingStatusCount {
 export interface SellerDashboardEntry {
   seller_id: string
   ml_nickname: string
+  is_active: boolean
   listings_by_status: Record<string, number>
   total_listings: number
   last_activity_at: string | null

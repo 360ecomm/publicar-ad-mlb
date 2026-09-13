@@ -5,7 +5,7 @@ import { getDashboard, type SellerDashboardEntry } from "@/lib/api/sellers"
 import { useSeller } from "@/contexts/SellerContext"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Loader2, ShoppingBag, LayoutDashboard, Check } from "lucide-react"
+import { Loader2, ShoppingBag, Check } from "lucide-react"
 import Link from "next/link"
 import { formatDistanceToNow } from "date-fns"
 import { ptBR } from "date-fns/locale"
@@ -111,8 +111,8 @@ export default function DashboardPage() {
   return (
     <div>
       <div className="mb-6 flex items-center gap-2">
-        <LayoutDashboard className="w-5 h-5 text-slate-600" />
-        <h1 className="text-2xl font-bold text-foreground">Anúncios</h1>
+        <ShoppingBag className="w-5 h-5 text-slate-600" />
+        <h1 className="text-2xl font-bold text-foreground">Contas</h1>
       </div>
 
       {isLoading ? (

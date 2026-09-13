@@ -16,7 +16,7 @@ export default function AttributesGridPage() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-4">
-        <Link href="/" className="text-sm text-slate-500 hover:text-slate-700">← Voltar ao kanban</Link>
+        <Link href="/listings" className="text-sm text-slate-500 hover:text-slate-700">← Voltar à fila</Link>
         <h1 className="text-xl font-semibold text-foreground">Atributos por anúncio</h1>
       </div>
 

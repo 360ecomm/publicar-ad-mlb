@@ -6,14 +6,24 @@ import { usePathname, useRouter } from "next/navigation"
 import {
   Settings, LogOut, Tag, ChevronLeft, ChevronRight,
   LayoutDashboard, Upload, Sun, Moon, Package,
-  ShoppingBag, ChevronDown, Check,
+  ShoppingBag, ChevronDown, Check, type LucideIcon,
 } from "lucide-react"
 import { clearAuth } from "@/lib/api/client"
 import { useTheme } from "@/contexts/ThemeContext"
 import { useSeller } from "@/contexts/SellerContext"
 
-const NAV_ITEMS = [
-  { href: "/", label: "Anúncios", icon: LayoutDashboard, exact: true },
+interface NavItem {
+  href: string
+  label: string
+  icon: LucideIcon
+  exact?: boolean
+}
+
+const NAV_ITEMS: NavItem[] = [
+  // A fila e' a porta de entrada do trabalho; `/` so redireciona pra ca.
+  // Sem `exact`: /listings/attributes e /listings/{id}/... tambem destacam.
+  { href: "/listings", label: "Anúncios", icon: LayoutDashboard },
+  { href: "/contas", label: "Contas", icon: ShoppingBag },
   { href: "/products", label: "Produtos", icon: Package },
   { href: "/import", label: "Importar anúncios", icon: Upload },
   { href: "/settings", label: "Configurações", icon: Settings },
