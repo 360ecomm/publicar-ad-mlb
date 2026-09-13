@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import { Sidebar } from "@/components/layout/Sidebar"
+import { AccountBar } from "@/components/layout/AccountBar"
 import { SellerProvider } from "@/contexts/SellerContext"
 
 export default function DashboardLayout({
@@ -35,9 +36,12 @@ export default function DashboardLayout({
     <SellerProvider>
       <div className="flex h-screen overflow-hidden bg-background">
         <Sidebar />
-        <main className="flex-1 min-w-0 overflow-y-auto p-6">
-          <div key={pathname} className="animate-in fade-in duration-200">
-            {children}
+        <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          <AccountBar />
+          <div className="flex-1 overflow-y-auto p-6">
+            <div key={pathname} className="animate-in fade-in duration-200">
+              {children}
+            </div>
           </div>
         </main>
       </div>

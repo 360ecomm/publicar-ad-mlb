@@ -35,3 +35,7 @@ export async function listSellers(): Promise<SellerOut[]> {
 export async function getDashboard(): Promise<DashboardResponse> {
   return apiFetch<DashboardResponse>("/api/v1/dashboard")
 }
+
+export async function disconnectSeller(id: string): Promise<SellerOut> {
+  return apiFetch<SellerOut>(`/api/v1/sellers/${id}/disconnect`, { method: "POST" })
+}
