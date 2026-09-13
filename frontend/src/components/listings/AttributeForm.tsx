@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
-import { ChevronDown, Loader2 } from "lucide-react"
+import { ChevronDown, Info, Loader2 } from "lucide-react"
 import type { AttributeOut } from "@/types/listing"
+import { classifyAttributes, fixedValue, isFixed } from "@/lib/attribute-visibility"
 
 interface AttributeValue {
   value_id?: string
@@ -25,12 +26,20 @@ export function AttributeForm({ listingId, attributes }: Props) {
   const router = useRouter()
   const queryClient = useQueryClient()
 
-  const required = attributes.filter((a) => a.is_required)
-  const optional = attributes.filter((a) => !a.is_required)
+  // Só o que o operador deve preencher: `is_editable` vem do backend e
+  // obrigatório aparece mesmo não editável (ver lib/attribute-visibility).
+  // O envio continua filtrando por valor preenchido, então campo escondido
+  // (vazio) simplesmente não entra no payload — nada é apagado.
+  const { visible, hiddenCount, unclassified } = classifyAttributes(attributes)
+  const required = visible.filter((a) => a.is_required)
+  const optional = visible.filter((a) => !a.is_required)
 
   const initialValues: Record<string, AttributeValue> = {}
   attributes.forEach((attr) => {
-    initialValues[attr.attribute_id] = {
+    // Atributo `fixed` nasce com o único valor possível já no estado: o
+    // backend não o pré-preenche, e sem isso o obrigatório nunca validaria.
+    const fixed = fixedValue(attr)
+    initialValues[attr.attribute_id] = fixed ?? {
       value_id: attr.value_id ?? undefined,
       value_name: attr.value_name ?? "",
     }
@@ -79,10 +88,31 @@ export function AttributeForm({ listingId, attributes }: Props) {
     mutation.mutate()
   }
 
-  if (attributes.length === 0) {
+  const notices = (
+    <>
+      {unclassified && (
+        <p className="flex items-start gap-2 text-xs text-slate-500 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-md px-3 py-2">
+          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
+            Os campos deste anúncio não foram classificados porque ele é anterior à classificação
+            de atributos; por isso a lista está completa, incluindo campos internos do Mercado Livre.
+          </span>
+        </p>
+      )}
+      {hiddenCount > 0 && (
+        <p className="text-xs text-slate-400">
+          {hiddenCount} {hiddenCount === 1 ? "campo interno" : "campos internos"} do Mercado Livre{" "}
+          {hiddenCount === 1 ? "oculto" : "ocultos"}.
+        </p>
+      )}
+    </>
+  )
+
+  if (visible.length === 0) {
     return (
-      <div className="text-center py-12 text-slate-500">
+      <div className="text-center py-12 text-slate-500 space-y-4">
         <p>Nenhum atributo para preencher nesta categoria.</p>
+        {notices}
         <Button className="mt-4" onClick={() => mutation.mutate()}>
           Continuar
         </Button>
@@ -92,6 +122,7 @@ export function AttributeForm({ listingId, attributes }: Props) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
+      {notices}
       {required.length > 0 && (
         <section className="space-y-4">
           <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-widest">
@@ -183,7 +214,15 @@ function AttributeField({ attr, value, onSelectChange, onTextChange }: FieldProp
         </span>
       </div>
 
-      {attr.allowed_values && attr.allowed_values.length > 0 ? (
+      {isFixed(attr) ? (
+        <Input
+          id={attr.attribute_id}
+          value={value?.value_name ?? ""}
+          readOnly
+          disabled
+          aria-readonly="true"
+        />
+      ) : attr.allowed_values && attr.allowed_values.length > 0 ? (
         <select
           id={attr.attribute_id}
           value={value?.value_id ?? ""}
@@ -209,8 +248,12 @@ function AttributeField({ attr, value, onSelectChange, onTextChange }: FieldProp
         />
       )}
 
-      {attr.source === "ai" && attr.value_name && (
-        <p className="text-xs text-slate-400">Sugerido pela IA — confirme ou altere</p>
+      {isFixed(attr) ? (
+        <p className="text-xs text-slate-400">Valor definido pela categoria; não pode ser alterado.</p>
+      ) : (
+        attr.source === "ai" && attr.value_name && (
+          <p className="text-xs text-slate-400">Sugerido pela IA — confirme ou altere</p>
+        )
       )}
     </div>
   )
