@@ -100,6 +100,13 @@ function SellerCard({ entry, onDisconnect }: { entry: SellerDashboardEntry; onDi
         )}
 
         <div className="flex flex-wrap items-center gap-2 pt-1">
+          {/* O link SÓ existe no cartão da conta selecionada, e é de propósito:
+              a fila lê a conta do X-Seller-ID, não da URL. Mostrá-lo em todo
+              cartão levaria o operador a "ver os anúncios desta conta" e abrir
+              a fila de OUTRA — o erro invisível de agir no anúncio errado.
+              Se um dia ele tiver de aparecer em todos, o clique precisa chamar
+              `setActiveSeller(seller)` ANTES de navegar (o contexto grava o
+              localStorage e reseta as consultas), nunca só navegar. */}
           {isActive && (
             <Button asChild variant="ghost" size="sm" className="px-0 text-slate-500 hover:text-foreground">
               <Link href="/listings">Ver anúncios desta conta →</Link>
