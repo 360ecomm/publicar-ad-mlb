@@ -42,7 +42,7 @@ const EMPTY_FORM = {
 
 export default function SettingsPage() {
   const [connecting, setConnecting] = useState(false)
-  const { activeSeller, setActiveSeller, reload } = useSeller()
+  const { activeSeller, setActiveSeller } = useSeller()
 
   // --- Title Config form state ---
   const [showForm, setShowForm] = useState(false)
@@ -186,20 +186,15 @@ export default function SettingsPage() {
     setConnecting(true)
     try {
       const url = await getMLConnectUrl()
-      window.location.href = url
+      // Aba nova: o operador não perde a aplicação. O callback devolve a aba
+      // nova em /contas?ml_connected=true; a lista daqui refaz no foco
+      // (refetchOnWindowFocus já está ligado na query "sellers").
+      window.open(url, "_blank", "noopener")
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao obter URL de conexão"
       toast.error(message)
+    } finally {
       setConnecting(false)
-    }
-  }
-
-  // Quando voltar do OAuth com ml_connected=true, recarrega a lista de sellers
-  if (typeof window !== "undefined") {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get("ml_connected") === "true") {
-      reload()
-      window.history.replaceState({}, "", "/settings")
     }
   }
 
@@ -282,8 +277,13 @@ export default function SettingsPage() {
                             Ativa
                           </span>
                         )}
+                        {!seller.is_active && (
+                          <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full flex-shrink-0">
+                            Desconectada
+                          </span>
+                        )}
                       </div>
-                      {!isActive && (
+                      {seller.is_active && !isActive && (
                         <Button
                           variant="outline"
                           size="sm"
