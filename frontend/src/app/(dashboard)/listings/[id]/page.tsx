@@ -2,6 +2,8 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getListing, retryPipeline, deleteListing, generateImages, resumeRawPhotos, resumeAiEngine } from "@/lib/api/listings"
+import { ApiError } from "@/lib/api/client"
+import { describeResumeError, standbyGuidance } from "@/lib/standby-guidance"
 import { formatPrice, formatQuantity } from "@/lib/utils"
 import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -59,16 +61,20 @@ export default function ListingDetailPage() {
     staleTime: Infinity,
   })
 
+  // 409 (fotos ainda ausentes, status que já mudou) vira mensagem legível;
+  // erro técnico nunca chega cru (describeResumeError).
+  const resumeError = (err: Error) =>
+    toast.error(describeResumeError(err instanceof ApiError ? err.status : 0, err.message))
+
   const resumeRawPhotosMutation = useMutation({
     mutationFn: () => resumeRawPhotos(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["listing", id] })
       queryClient.invalidateQueries({ queryKey: ["listings"] })
+      queryClient.invalidateQueries({ queryKey: ["status-counts"] })
       toast.success("Fotos encontradas. Geração de imagens retomada.")
     },
-    onError: (err: Error) => {
-      toast.error(err.message || "As fotos ainda não estão no bucket")
-    },
+    onError: resumeError,
   })
 
   const resumeAiEngineMutation = useMutation({
@@ -76,11 +82,10 @@ export default function ListingDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["listing", id] })
       queryClient.invalidateQueries({ queryKey: ["listings"] })
+      queryClient.invalidateQueries({ queryKey: ["status-counts"] })
       toast.success("Geração de imagens retomada. Se o motor continuar indisponível, o anúncio volta a esperar.")
     },
-    onError: (err: Error) => {
-      toast.error(err.message || "Não foi possível retomar agora")
-    },
+    onError: resumeError,
   })
 
   const retryMutation = useMutation({
@@ -142,6 +147,8 @@ export default function ListingDetailPage() {
   const status = listing.status
   const isProcessing =
     PROCESSING_STATUSES.includes(status) || status === "predicting_category"
+  const standby = standbyGuidance(status, listing.sku_external_id)
+  const standbyMutation = status === "pending_ai_engine" ? resumeAiEngineMutation : resumeRawPhotosMutation
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -293,66 +300,29 @@ export default function ListingDetailPage() {
         </Card>
       )}
 
-      {status === "pending_raw_photos" && (
+      {/* Standbys: a orientação vem do STATUS (standbyGuidance), nunca do
+          `error_message` gravado, que é uma foto do momento em que o anúncio
+          parou e não acompanha correções. Só o status correspondente mostra
+          o botão de retomada. */}
+      {standby && (
         <Card className="border-amber-200 bg-amber-50">
           <CardHeader>
             <CardTitle className="text-base text-amber-900 flex items-center gap-2">
               <AlertCircle className="w-5 h-5" />
-              Aguardando fotos brutas do produto
+              {standby.title}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-amber-800 mb-3">
-              As fotos deste SKU ainda não estão no bucket do seller. O sistema verifica
-              sozinho a cada 15 minutos; depois de subir os arquivos, você pode verificar agora.
-            </p>
-            {listing.error_message && (
-              <p className="text-sm text-amber-800 mb-4 p-3 bg-amber-100 rounded-md font-mono">
-                {listing.error_message}
-              </p>
-            )}
+            <p className="text-sm text-amber-800 mb-4">{standby.body}</p>
             <Button
               className="w-full"
-              disabled={resumeRawPhotosMutation.isPending}
-              onClick={() => resumeRawPhotosMutation.mutate()}
+              disabled={standbyMutation.isPending}
+              onClick={() => standbyMutation.mutate()}
             >
-              {resumeRawPhotosMutation.isPending ? (
+              {standbyMutation.isPending ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : null}
-              Verificar fotos agora
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {status === "pending_ai_engine" && (
-        <Card className="border-amber-200 bg-amber-50">
-          <CardHeader>
-            <CardTitle className="text-base text-amber-900 flex items-center gap-2">
-              <AlertCircle className="w-5 h-5" />
-              Aguardando o motor de imagem (crédito OpenAI)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-amber-800 mb-3">
-              O motor de imagem respondeu como indisponível: crédito esgotado, chave inválida
-              ou instabilidade. O sistema tenta de novo sozinho a cada 15 minutos; depois de
-              recarregar o crédito, você pode tentar agora.
-            </p>
-            {listing.error_message && (
-              <p className="text-sm text-amber-800 mb-4 p-3 bg-amber-100 rounded-md font-mono">
-                {listing.error_message}
-              </p>
-            )}
-            <Button
-              className="w-full"
-              disabled={resumeAiEngineMutation.isPending}
-              onClick={() => resumeAiEngineMutation.mutate()}
-            >
-              {resumeAiEngineMutation.isPending ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : null}
-              Tentar agora
+              {standby.action}
             </Button>
           </CardContent>
         </Card>

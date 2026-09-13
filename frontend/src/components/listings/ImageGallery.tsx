@@ -2,71 +2,109 @@
 
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { AlertTriangle, CheckSquare, ImageOff, Loader2, Square } from "lucide-react"
-import { approveImages } from "@/lib/api/listings"
+import { AlertTriangle, CheckSquare, ImageOff, Images, Loader2, RefreshCw, Square } from "lucide-react"
+import { approveImages, getListings, regeneratePosition } from "@/lib/api/listings"
+import { ApiError } from "@/lib/api/client"
 import {
   approvalPlan,
+  approvalToast,
   buildGallerySlots,
   candidateAlternatives,
+  canRegenerate,
   defaultSelection,
+  describeRegenerateError,
   mlPictureUrl,
+  nextReviewRoute,
   orderedApprovedIds,
+  regenerateWarning,
+  type GalleryPosition,
   type GallerySlot,
 } from "@/lib/image-review"
 import { useReviewTimer } from "@/hooks/useReviewTimer"
+import { RawPhotosPanel } from "@/components/listings/RawPhotosPanel"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { ImageOut } from "@/types/listing"
+import type { ImageOut, ListingDetail } from "@/types/listing"
 
 interface Props {
   listingId: string
+  /** SKU do anúncio, para o aviso "SKU X: n imagens aprovadas". */
+  sku: string | null
   images: ImageOut[]
 }
 
 /**
  * Galeria de revisão por POSIÇÃO (esquema de 5 posições).
  *
- * Reescrita da galeria "selecione as que quiser": aqui as 5 posições aparecem
- * sempre, na mesma ordem e com o rótulo da posição; candidatas das Frentes A/B
- * nunca entram (`is_candidate` vem do backend); a seleção nasce com tudo que
- * está pronto marcado; e os ids são enviados em ordem de posição, nunca na
- * ordem dos cliques (ver `orderedApprovedIds` em lib/image-review.ts).
+ * As 5 posições aparecem sempre, na mesma ordem e com o rótulo da posição;
+ * candidatas das Frentes A/B nunca entram (`is_candidate` vem do backend); a
+ * seleção nasce com tudo que está pronto marcado; e os ids são enviados em
+ * ordem de posição, nunca na ordem dos cliques (`orderedApprovedIds`).
+ *
+ * Parte 2: regenerar uma posição que não serviu (sem prender o operador: a
+ * posição vira `generating` e a tela segue usável; quem atualiza é a consulta
+ * periódica da página, só enquanto houver `generating`), ver as fotos
+ * originais sob demanda, e ir direto ao próximo anúncio depois de aprovar.
  */
-export function ImageGallery({ listingId, images }: Props) {
+export function ImageGallery({ listingId, sku, images }: Props) {
   const router = useRouter()
   const queryClient = useQueryClient()
 
   const slots = useMemo(() => buildGallerySlots(images), [images])
   const alternativas = useMemo(() => candidateAlternatives(images), [images])
 
-  // Seleção inicial = todas as posições prontas. `useState` com função só roda
-  // na montagem, que é o que se quer: o operador parte do caso normal (5
-  // marcadas) e desmarca o que não serve, em vez de clicar 5 vezes.
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(defaultSelection(slots)))
+  // A seleção é guardada pelo AVESSO: o que o operador DESMARCOU. Assim uma
+  // posição que chega pronta depois (regeneração concluída durante a revisão)
+  // entra marcada, como as outras, sem efeito nem sincronização de estado.
+  const [deselected, setDeselected] = useState<Set<string>>(() => new Set())
+  const selected = useMemo(
+    () => new Set(defaultSelection(slots).filter((id) => !deselected.has(id))),
+    [slots, deselected],
+  )
   const [confirming, setConfirming] = useState(false)
+  const [confirmingRegen, setConfirmingRegen] = useState<GalleryPosition | null>(null)
+  const [showOriginals, setShowOriginals] = useState(false)
 
   const plan = useMemo(() => approvalPlan(slots, selected), [slots, selected])
+  const generatingLabels = slots.filter((s) => s.state === "generating").map((s) => s.label)
   // Conta a partir do momento em que há imagem na tela; pausa com a aba fora de foco.
   const elapsedSeconds = useReviewTimer(slots.some((s) => s.state !== "missing"))
+
+  // Só consulta a fila DEPOIS de aprovar, e na hora: com workers rodando, uma
+  // lista carregada antes envelhece. `enabled: false` = nunca sozinha.
+  const proximoQuery = useQuery({
+    queryKey: ["listings", "next-review", listingId],
+    // Dois itens, não um: o atual pode ainda aparecer na resposta (a fila é
+    // lida logo depois do commit) e excluí-lo não pode deixar a lista vazia.
+    queryFn: () => getListings({ status: ["pending_image_approval"], page_size: 2 }),
+    enabled: false,
+    gcTime: 0,
+  })
 
   const mutation = useMutation({
     mutationFn: () => {
       // ORDEM = posição. `approve_images` renumera os slots na ordem em que os
       // ids chegam, e essa ordem é a publicada no ML (CLAUDE.md, "A aprovação
-      // individual renumera; a em massa não"). Nunca `Array.from(selected)`:
-      // um Set guarda a ordem dos cliques, e remarcar a capa por último a
-      // mandaria para o fim da galeria.
+      // individual renumera; a em massa não"). Nunca `Array.from(selected)`.
       const ids = orderedApprovedIds(slots, selected)
       return approveImages(listingId, ids, elapsedSeconds())
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["listing", listingId] })
       queryClient.invalidateQueries({ queryKey: ["listings"] })
       queryClient.invalidateQueries({ queryKey: ["status-counts"] })
-      toast.success(`Imagens aprovadas: ${plan.total} no anúncio.`)
-      router.push("/listings")
+      // Aviso no canto, sem clique e sem bloquear: o operador já está indo embora.
+      toast.success(approvalToast(sku, plan.total))
+      let destino = "/listings"
+      try {
+        const { data } = await proximoQuery.refetch()
+        destino = nextReviewRoute(data?.items ?? [], listingId)
+      } catch {
+        // Falhou a consulta da fila: a aprovação já aconteceu; volta para a fila.
+      }
+      router.push(destino)
     },
     onError: (err: Error) => {
       setConfirming(false)
@@ -74,10 +112,30 @@ export function ImageGallery({ listingId, images }: Props) {
     },
   })
 
+  const regen = useMutation({
+    mutationFn: (position: GalleryPosition) => regeneratePosition(listingId, position),
+    onSuccess: (placeholder) => {
+      // O 202 já traz o placeholder `generating`: entra no cache na hora, a
+      // posição muda de estado e a consulta periódica da página (só enquanto
+      // houver `generating`) traz o resultado. Nada prende o operador aqui.
+      queryClient.setQueryData<ListingDetail>(["listing", listingId], (old) =>
+        old ? { ...old, images: [...old.images, placeholder] } : old,
+      )
+      queryClient.invalidateQueries({ queryKey: ["listing", listingId] })
+    },
+    onError: (err: Error, position) => {
+      const status = err instanceof ApiError ? err.status : 0
+      toast.error(describeRegenerateError(status, err.message, position))
+      // 409 = o estado da tela envelheceu; a consulta mostra o que há de fato.
+      if (status === 409) queryClient.invalidateQueries({ queryKey: ["listing", listingId] })
+    },
+    onSettled: () => setConfirmingRegen(null),
+  })
+
   const toggle = (slot: GallerySlot) => {
     if (slot.state !== "ready" || slot.image === null) return
     const id = slot.image.id
-    setSelected((prev) => {
+    setDeselected((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -93,7 +151,16 @@ export function ImageGallery({ listingId, images }: Props) {
     else mutation.mutate()
   }
 
+  const handleRegenerate = (slot: GallerySlot) => {
+    if (!canRegenerate(slot) || regen.isPending) return
+    // Benefícios (posição 2): a copy é pedida de novo ao LLM e o texto do
+    // card pode mudar. O operador precisa saber ANTES de gastar a chamada.
+    if (regenerateWarning(slot.position)) setConfirmingRegen(slot.position)
+    else regen.mutate(slot.position)
+  }
+
   const ausentes = slots.every((s) => s.state === "missing")
+  const regenAviso = confirmingRegen === null ? null : regenerateWarning(confirmingRegen)
 
   return (
     <div className="space-y-6">
@@ -117,15 +184,32 @@ export function ImageGallery({ listingId, images }: Props) {
             slot={slot}
             selected={slot.image !== null && selected.has(slot.image.id)}
             onToggle={() => toggle(slot)}
+            onRegenerate={() => handleRegenerate(slot)}
+            regenerating={regen.isPending && regen.variables === slot.position}
+            regenDisabled={regen.isPending}
           />
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="outline" size="sm" onClick={() => setShowOriginals((v) => !v)}>
+          <Images className="mr-2 h-4 w-4" />
+          {showOriginals ? "Ocultar original" : "Ver original"}
+        </Button>
+        <span className="text-xs text-slate-500">
+          As fotos brutas do produto, para comparar na dúvida. Buscadas só quando você pede.
+        </span>
+      </div>
+      {showOriginals && <RawPhotosPanel listingId={listingId} />}
+
       <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
         <p className="text-sm text-slate-600">
           {plan.blockedByGenerating ? (
-            <span className="text-amber-700">
-              Há posição em regeneração; a aprovação fica disponível quando ela terminar.
+            <span className="flex items-center gap-2 text-amber-700">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              Aprovar bloqueado enquanto {generatingLabels.join(" e ")}{" "}
+              {generatingLabels.length === 1 ? "está sendo regenerada" : "estão sendo regeneradas"}: a tela
+              atualiza sozinha quando terminar. Você pode sair; o anúncio continua na fila.
             </span>
           ) : plan.available === 0 ? (
             "Nenhuma posição pronta para aprovar."
@@ -182,6 +266,33 @@ export function ImageGallery({ listingId, images }: Props) {
           </div>
         </div>
       )}
+
+      {confirmingRegen !== null && regenAviso && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="regen-confirm-title"
+        >
+          <div className="w-full max-w-md rounded-lg bg-background p-5 shadow-lg">
+            <h2 id="regen-confirm-title" className="text-base font-semibold">
+              Regenerar {slots[confirmingRegen].label}?
+            </h2>
+            <p className="mt-2 flex items-start gap-2 text-sm text-amber-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              {regenAviso}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmingRegen(null)} disabled={regen.isPending}>
+                Voltar
+              </Button>
+              <Button size="sm" onClick={() => regen.mutate(confirmingRegen)} disabled={regen.isPending}>
+                {regen.isPending ? "Enviando..." : "Regenerar"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -197,37 +308,47 @@ function SlotCard({
   slot,
   selected,
   onToggle,
+  onRegenerate,
+  regenerating,
+  regenDisabled,
 }: {
   slot: GallerySlot
   selected: boolean
   onToggle: () => void
+  onRegenerate: () => void
+  /** Este slot está com o pedido de regeneração em voo (antes do 202). */
+  regenerating: boolean
+  /** Algum pedido em voo: um por vez, para não enfileirar por engano. */
+  regenDisabled: boolean
 }) {
   const pronta = slot.state === "ready" && slot.image?.ml_picture_id
   const clicavel = slot.state === "ready"
+  const regeneravel = canRegenerate(slot)
 
   return (
     <div
-      role={clicavel ? "checkbox" : undefined}
-      aria-checked={clicavel ? selected : undefined}
-      aria-label={`${slot.label}: ${slot.state === "ready" ? (selected ? "marcada" : "desmarcada") : STATE_TEXT[slot.state]}`}
-      tabIndex={clicavel ? 0 : -1}
-      onClick={onToggle}
-      onKeyDown={(e) => {
-        if (clicavel && (e.key === " " || e.key === "Enter")) {
-          e.preventDefault()
-          onToggle()
-        }
-      }}
       className={cn(
-        "relative overflow-hidden rounded-lg border-2 transition-all",
-        clicavel && "cursor-pointer",
+        "overflow-hidden rounded-lg border-2 transition-all",
         clicavel && selected && "border-blue-500 shadow-md",
         clicavel && !selected && "border-slate-200 hover:border-slate-300",
         !clicavel && "border-dashed border-slate-200",
-        slot.state === "missing" && "opacity-60",
+        slot.state === "missing" && "opacity-80",
       )}
     >
-      <div className="relative aspect-square bg-slate-100">
+      <div
+        role={clicavel ? "checkbox" : undefined}
+        aria-checked={clicavel ? selected : undefined}
+        aria-label={`${slot.label}: ${slot.state === "ready" ? (selected ? "marcada" : "desmarcada") : STATE_TEXT[slot.state]}`}
+        tabIndex={clicavel ? 0 : -1}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (clicavel && (e.key === " " || e.key === "Enter")) {
+            e.preventDefault()
+            onToggle()
+          }
+        }}
+        className={cn("relative aspect-square bg-slate-100", clicavel && "cursor-pointer")}
+      >
         {pronta ? (
           // Imagem externa do CDN do ML, já no tamanho final (1200x1200): o
           // otimizador do next/image não acrescenta nada aqui, e exigiria
@@ -282,6 +403,26 @@ function SlotCard({
           </span>
         )}
       </div>
+
+      {regeneravel && (
+        <div className="border-t px-2 py-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full"
+            onClick={onRegenerate}
+            disabled={regenDisabled}
+            aria-label={`Regenerar ${slot.label}`}
+          >
+            {regenerating ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+            Regenerar
+          </Button>
+          {regenerateWarning(slot.position) && (
+            <p className="mt-1 text-[11px] leading-snug text-amber-700">O texto do card pode mudar.</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

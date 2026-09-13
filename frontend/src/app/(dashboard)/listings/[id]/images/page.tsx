@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft, Loader2 } from "lucide-react"
 import { getListing } from "@/lib/api/listings"
+import { pollIntervalFor } from "@/lib/image-review"
 import { ImageGallery } from "@/components/listings/ImageGallery"
 import { ListingStatusBadge } from "@/components/listings/ListingStatusBadge"
 
@@ -35,6 +36,10 @@ export default function ImagesPage() {
   const { data: listing, isLoading } = useQuery({
     queryKey: ["listing", id],
     queryFn: () => getListing(id),
+    // Consulta periódica leve SÓ enquanto houver posição em regeneração
+    // (`generating`); devolve false e para sozinha quando nenhuma houver.
+    // Nada de laço permanente como o quadro antigo fazia.
+    refetchInterval: (query) => pollIntervalFor(query.state.data?.images),
   })
 
   const { data: categoryPath, isError: categoryError } = useQuery({
@@ -111,7 +116,10 @@ export default function ImagesPage() {
         </dd>
       </dl>
 
-      <ImageGallery listingId={id} images={listing.images} />
+      {/* `key={id}`: ao ir ao próximo anúncio pela mesma rota, a galeria nasce
+          do zero (seleção, cronômetro, painel de originais) em vez de herdar
+          o estado do anterior. */}
+      <ImageGallery key={id} listingId={id} sku={listing.sku_external_id} images={listing.images} />
     </div>
   )
 }

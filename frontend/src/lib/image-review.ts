@@ -1,4 +1,4 @@
-import type { ImageOut } from "@/types/listing"
+import type { ImageOut, ListingSummary, RawPhotosOut } from "@/types/listing"
 import { sanitizeBulkError } from "./bulk-actions"
 
 /**
@@ -164,4 +164,116 @@ export function approvalPlan(slots: GallerySlot[], selected: ReadonlySet<string>
 /** URL pública da imagem no CDN do ML a partir do `ml_picture_id`. */
 export function mlPictureUrl(mlPictureId: string): string {
   return `https://http2.mlstatic.com/D_NQ_NP_${mlPictureId}-V.jpg`
+}
+
+// ---------------------------------------------------------------------------
+// Parte 2 da revisão: regenerar, ver original, próximo anúncio
+// ---------------------------------------------------------------------------
+
+/**
+ * Regenerar só faz sentido numa posição que não serviu: reprovada no QA,
+ * falhou ao gerar ou nunca gerada. `ready` não regenera (o operador desmarca
+ * e aprova o resto), `generating` já está em regeneração, e imagem aprovada
+ * nunca é substituída por trás do operador (o backend recusa com 409).
+ */
+export function canRegenerate(slot: GallerySlot): boolean {
+  if (slot.image?.approved) return false
+  return slot.state === "qa_failed" || slot.state === "generation_failed" || slot.state === "missing"
+}
+
+/**
+ * Só a posição 2 (Benefícios) tem texto vindo do LLM: regenerar pede copy
+ * nova, e o card pode sair com bullets diferentes dos que o operador já leu.
+ * As outras posições têm legenda fixa (perfil) ou bullets determinísticos.
+ */
+export function regenerateWarning(position: GalleryPosition): string | null {
+  if (position !== 2) return null
+  return "Regenerar os Benefícios pede um texto novo à IA: o texto do card pode mudar, não só a imagem."
+}
+
+/**
+ * Mensagem legível para os erros de `POST .../positions/{p}/regenerate`.
+ * Casa com as strings do backend (`ListingService.regenerate_position`) sem
+ * mostrar corpo cru nem nome interno de status. O rótulo é o da tela
+ * (Capa, Apresentação...), nunca "posição 2": a API conta de 0 e a tela de 1.
+ */
+export function describeRegenerateError(
+  status: number,
+  detail: string | null | undefined,
+  position: GalleryPosition,
+): string {
+  const label = POSITION_LABELS[position]
+  const text = (detail ?? "").trim()
+  const lower = text.toLowerCase()
+  if (status === 409) {
+    if (lower.includes("em andamento")) return `${label} já está sendo regenerada; aguarde ela terminar.`
+    if (lower.includes("já está aprovada")) return `${label} já está aprovada e não é regenerada.`
+    if (lower.includes("apenas no status")) {
+      return "Este anúncio saiu da revisão de imagens (outra ação ou o sistema avançou). Recarregue a tela."
+    }
+  }
+  if (status === 503) {
+    return "Fila de processamento indisponível; o pedido não foi registrado. Tente de novo em instantes."
+  }
+  const saneado = sanitizeBulkError(text)
+  if (saneado.technical || !text) return `Não foi possível regenerar ${label} agora; tente de novo.`
+  return `${label}: ${saneado.message}`
+}
+
+/** Intervalo da consulta periódica (ms): só existe enquanto há posição `generating`. */
+export const GENERATING_POLL_MS = 3000
+
+/**
+ * `refetchInterval` do React Query: consulta a cada 3 s enquanto alguma das 5
+ * posições estiver em regeneração e para sozinha (false) quando nenhuma
+ * estiver. Candidatas não contam: não aparecem na galeria. Nada de laço
+ * permanente como o quadro antigo fazia.
+ */
+export function pollIntervalFor(images: ImageOut[] | undefined): number | false {
+  if (!images || images.length === 0) return false
+  return buildGallerySlots(images).some((s) => s.state === "generating") ? GENERATING_POLL_MS : false
+}
+
+export interface RawPhotoGroupView {
+  sku: string
+  urls: string[]
+  /** Bucket configurado, mas este SKU não tem nenhum original. */
+  empty: boolean
+}
+
+export type RawPhotosView =
+  | { kind: "unconfigured" }
+  | { kind: "photos"; groups: RawPhotoGroupView[]; total: number }
+
+/**
+ * Os três casos do "ver original", cada um com texto próprio na tela:
+ * bucket não configurado (orientar a ir em Configurações), grupo sem URL
+ * (bucket ok, este SKU sem original) e as fotos em si. Um anúncio pode
+ * virar kit: cada grupo carrega o próprio SKU.
+ */
+export function rawPhotosView(data: RawPhotosOut): RawPhotosView {
+  if (!data.configured) return { kind: "unconfigured" }
+  const groups = data.groups.map((g) => ({ sku: g.sku, urls: g.urls, empty: g.urls.length === 0 }))
+  return { kind: "photos", groups, total: groups.reduce((n, g) => n + g.urls.length, 0) }
+}
+
+/**
+ * Para onde ir depois de aprovar: a revisão do próximo anúncio em
+ * `pending_image_approval`, consultado na hora (nunca de lista carregada
+ * antes: com workers rodando ela envelhece), excluindo o atual; sem
+ * próximo, a fila. O status é conferido de novo aqui porque a resposta pode
+ * ter envelhecido entre a consulta e a navegação.
+ */
+export function nextReviewRoute(
+  items: ReadonlyArray<Pick<ListingSummary, "id" | "status">>,
+  currentId: string,
+): string {
+  const proximo = items.find((i) => i.id !== currentId && i.status === "pending_image_approval")
+  return proximo ? `/listings/${proximo.id}/images` : "/listings"
+}
+
+/** Aviso curto no canto depois de aprovar: "SKU 45: 5 imagens aprovadas". */
+export function approvalToast(sku: string | null | undefined, total: number): string {
+  const quem = sku && sku.trim() ? sku.trim() : "Anúncio"
+  return `${quem}: ${total} ${total === 1 ? "imagem aprovada" : "imagens aprovadas"}`
 }

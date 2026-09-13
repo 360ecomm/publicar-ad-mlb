@@ -8,6 +8,7 @@ import type {
   ListingAttributesRow,
   StatusCounts,
   RawPhotosOut,
+  ImageOut,
 } from "@/types/listing"
 
 export interface CreateListingPayload {
@@ -70,6 +71,19 @@ export async function getStatusCounts(): Promise<StatusCounts> {
  */
 export async function getRawPhotos(id: string): Promise<RawPhotosOut> {
   return apiFetch<RawPhotosOut>(`/api/v1/listings/${id}/raw-photos`)
+}
+
+/**
+ * Regenera UMA posição (0..4 = `sort_order`; a tela rotula 1..5). 202 com o
+ * placeholder `generating`; a imagem chega pela task e aparece em
+ * `GET /listings/{id}`. 409 fora de `pending_image_approval`, posição
+ * aprovada ou regeneração já em andamento; 503 com a fila fora (nada
+ * registrado). Ver `describeRegenerateError` em lib/image-review.ts.
+ */
+export async function regeneratePosition(id: string, posicao: number): Promise<ImageOut> {
+  return apiFetch<ImageOut>(`/api/v1/listings/${id}/images/positions/${posicao}/regenerate`, {
+    method: "POST",
+  })
 }
 
 export async function getListing(id: string): Promise<ListingDetail> {
