@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react"
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { listSellers, type SellerOut } from "@/lib/api/sellers"
 
@@ -11,7 +11,6 @@ interface SellerContextValue {
   connectedSellers: SellerOut[]
   activeSeller: SellerOut | null
   setActiveSeller: (seller: SellerOut) => void
-  clearActiveSeller: () => void
   isLoading: boolean
   reload: () => Promise<void>
 }
@@ -34,6 +33,14 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
 
   const connectedSellers = useMemo(() => sellers.filter((s) => s.is_active), [sellers])
 
+  // Última conta ativa vista por `load`, para saber se a troca exige reset
+  // de cache. `primedRef` marca se `load` já rodou ao menos uma vez: a
+  // PRIMEIRA resolução (antes de qualquer chamada, não há "conta anterior")
+  // não pode disparar reset de um cache que ainda está vazio — só a partir
+  // da segunda é que existe de fato uma troca.
+  const lastActiveIdRef = useRef<string | null>(null)
+  const primedRef = useRef(false)
+
   const load = useCallback(async () => {
     try {
       const data = await listSellers()
@@ -51,15 +58,42 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
       // apiFetch lê o X-Seller-ID de lá.
       persist(active?.id ?? null)
       setActiveSellerState(active)
+
+      // `reload` pode trocar a conta ativa por baixo do tapete (a conta
+      // anterior foi desconectada, ou outra aba gravou outro id no
+      // localStorage compartilhado): a tela não pode ficar com dados da
+      // conta anterior no cache. Mesmo invariante de `setActiveSeller`.
+      const nextId = active?.id ?? null
+      if (primedRef.current && lastActiveIdRef.current !== nextId) {
+        void queryClient.resetQueries()
+      }
+      primedRef.current = true
+      lastActiveIdRef.current = nextId
     } catch {
       // Sem token o layout já redireciona para /login; não propaga.
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [queryClient])
 
   useEffect(() => {
     load()
+  }, [load])
+
+  // localStorage é compartilhado entre abas e o `apiFetch` lê o
+  // X-Seller-ID de lá a cada chamada. Sem isto, a aba B continua mostrando
+  // a conta X enquanto manda o header da conta Y que a aba A acabou de
+  // escolher — escrita na conta errada (ex.: `PUT /sellers/image-config`
+  // não leva id no corpo, só o header). `e.key === null` cobre o
+  // `localStorage.clear()`.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY || e.key === null) {
+        void load()
+      }
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
   }, [load])
 
   const setActiveSeller = useCallback(
@@ -67,26 +101,24 @@ export function SellerProvider({ children }: { children: React.ReactNode }) {
       if (!seller.is_active) return
       if (activeSeller?.id === seller.id) return
       // Ordem importa: storage primeiro (o refetch lê o header de lá), depois
-      // o estado, depois o reset. `resetQueries` (não `invalidateQueries`)
-      // apaga o cache e refaz as ativas: a tela nunca mostra dados da conta
-      // anterior enquanto os novos chegam — trocar de conta e agir sobre o
-      // anúncio errado seria um erro invisível.
+      // o estado, depois o reset.
       persist(seller.id)
       setActiveSellerState(seller)
+      lastActiveIdRef.current = seller.id
+      // `resetQueries` SEM filtro, de propósito: é o reset sem filtro que
+      // limpa a chave ANTIGA antes do re-render, e é isso que impede o
+      // `placeholderData: (prev) => prev` do WorkQueue de pintar as linhas
+      // da conta anterior — e a chave antiga de continuar guardando a
+      // resposta de outra conta. Um "ajuste" para `resetQueries({ queryKey })`
+      // reintroduziria exatamente o defeito que esta branch fecha.
       void queryClient.resetQueries()
     },
     [activeSeller, queryClient]
   )
 
-  const clearActiveSeller = useCallback(() => {
-    persist(null)
-    setActiveSellerState(null)
-    void queryClient.resetQueries()
-  }, [queryClient])
-
   return (
     <SellerContext.Provider
-      value={{ sellers, connectedSellers, activeSeller, setActiveSeller, clearActiveSeller, isLoading, reload: load }}
+      value={{ sellers, connectedSellers, activeSeller, setActiveSeller, isLoading, reload: load }}
     >
       {children}
     </SellerContext.Provider>

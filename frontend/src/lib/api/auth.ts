@@ -17,21 +17,24 @@ export async function getMLConnectUrl(): Promise<string> {
   return res.auth_url
 }
 
-/**
- * Abre a autorização do ML em aba nova, sem dar à aba nova acesso a esta
- * (`opener = null`, o mesmo efeito de "noopener" — mas com o handle, que a
- * forma "noopener" do window.open nunca devolve). Se o navegador bloquear o
- * pop-up (o await da URL pode estourar a janela de ativação do clique),
- * cai na navegação na mesma aba: pior que a aba nova, melhor que um botão
- * que parece morto.
- */
 export async function openMLAuthorization(): Promise<"nova-aba" | "mesma-aba"> {
-  const url = await getMLConnectUrl()
-  const w = window.open(url, "_blank")
-  if (w) {
-    w.opener = null
-    return "nova-aba"
+  // A aba abre ANTES do await: window.open só e' permitido dentro da
+  // ativacao do clique, e o round-trip que busca a URL pode estourar essa
+  // janela (Safari bloqueia quase sempre depois de um await). Aberta em
+  // branco agora, recebe a URL quando ela chegar.
+  const w = window.open("", "_blank")
+  try {
+    const url = await getMLConnectUrl()
+    if (w) {
+      try { w.opener = null } catch { /* mesma origem em about:blank; nao deve falhar */ }
+      w.location.href = url
+      return "nova-aba"
+    }
+    // Pop-up bloqueado: pior que a aba nova, melhor que um botao que parece morto.
+    window.location.href = url
+    return "mesma-aba"
+  } catch (err) {
+    w?.close()
+    throw err
   }
-  window.location.href = url
-  return "mesma-aba"
 }

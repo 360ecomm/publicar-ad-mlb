@@ -12,25 +12,7 @@ import { openMLAuthorization } from "@/lib/api/auth"
 import { useSeller } from "@/contexts/SellerContext"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: "Rascunho",
-  generating_title: "Gerando título",
-  pending_title_approval: "Aguard. título",
-  predicting_category: "Prevendo cat.",
-  pending_seller_attributes: "Aguard. atributos",
-  pending_description: "Aguard. descrição",
-  generating_images: "Gerando imagens",
-  pending_raw_photos: "Aguard. fotos",
-  pending_ai_engine: "Aguard. motor de IA",
-  pending_image_approval: "Aguard. imagens",
-  generating_description: "Gerando descrição",
-  ready_to_publish: "Pronto p/ publicar",
-  publishing: "Publicando",
-  published: "Publicado",
-  published_paused: "Pausado",
-  failed: "Falhou",
-}
+import { STATUS_LABELS, type ListingStatus } from "@/types/listing"
 
 const STATUS_COLORS: Record<string, string> = {
   published: "bg-green-100 text-green-700",
@@ -49,14 +31,12 @@ function SellerCard({ entry, onDisconnect }: { entry: SellerDashboardEntry; onDi
   // Aba nova: o operador não perde a aplicação. O callback do backend manda
   // a aba nova para /contas?ml_connected=true; esta aba recarrega a lista ao
   // receber foco de novo (ver o efeito em ContasPage). Se o pop-up for
-  // bloqueado, cai na mesma aba — avisamos antes de navegar.
+  // bloqueado, `openMLAuthorization` já navega nesta mesma aba sozinha —
+  // não há o que avisar, a página muda antes de qualquer toast aparecer.
   const reconnect = async () => {
     setConnecting(true)
     try {
-      const destino = await openMLAuthorization()
-      if (destino === "mesma-aba") {
-        toast.info("Pop-up bloqueado: abrindo a autorização nesta aba.")
-      }
+      await openMLAuthorization()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erro ao obter URL de conexão")
     } finally {
@@ -104,7 +84,7 @@ function SellerCard({ entry, onDisconnect }: { entry: SellerDashboardEntry; onDi
                 className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full ${STATUS_COLORS[status] ?? "bg-slate-100 text-slate-600"}`}
               >
                 <span>{count}</span>
-                <span>{STATUS_LABELS[status] ?? status}</span>
+                <span>{STATUS_LABELS[status as ListingStatus] ?? status}</span>
               </span>
             ))}
           </div>
@@ -135,7 +115,7 @@ function SellerCard({ entry, onDisconnect }: { entry: SellerDashboardEntry; onDi
 
 export default function ContasPage() {
   const queryClient = useQueryClient()
-  const { activeSeller, reload } = useSeller()
+  const { reload } = useSeller()
   const [connecting, setConnecting] = useState(false)
   const [confirming, setConfirming] = useState<SellerDashboardEntry | null>(null)
 
@@ -164,10 +144,7 @@ export default function ContasPage() {
   const connect = async () => {
     setConnecting(true)
     try {
-      const destino = await openMLAuthorization()
-      if (destino === "mesma-aba") {
-        toast.info("Pop-up bloqueado: abrindo a autorização nesta aba.")
-      }
+      await openMLAuthorization()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erro ao obter URL de conexão")
     } finally {
@@ -177,20 +154,31 @@ export default function ContasPage() {
 
   const disconnectMutation = useMutation({
     mutationFn: (id: string) => disconnectSeller(id),
-    onSuccess: async (_seller, id) => {
-      const eraAtiva = activeSeller?.id === id
+    onSuccess: async () => {
       setConfirming(null)
       toast.success("Conta desconectada. O histórico foi mantido.")
-      // `reload` troca a ativa (ou limpa) quando a desconectada era a ativa;
-      // aí as queries precisam ser refeitas com o X-Seller-ID novo.
+      // O reset de cache da troca de conta agora é responsabilidade do
+      // contexto (`reload` já reseta quando a ativa muda por baixo); aqui só
+      // falta refazer o dashboard, que não passa pelo SellerContext.
       await reload()
-      if (eraAtiva) await queryClient.resetQueries()
-      else await queryClient.invalidateQueries({ queryKey: ["dashboard"] })
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] })
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Erro ao desconectar")
     },
   })
+
+  // Fecha o diálogo de confirmação com Esc; não faz sentido cancelar uma
+  // desconexão que já está em voo, então fica desarmado enquanto pendente.
+  useEffect(() => {
+    if (!confirming) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !disconnectMutation.isPending) setConfirming(null)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirming])
 
   return (
     <div>
@@ -232,6 +220,11 @@ export default function ContasPage() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="disconnect-title"
+          onClick={(e) => {
+            // Só fecha se o clique foi no backdrop mesmo (não borbulhou de
+            // dentro do card), e nunca com a mutação em voo.
+            if (e.target === e.currentTarget && !disconnectMutation.isPending) setConfirming(null)
+          }}
         >
           <div className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-xl space-y-4">
             <h2 id="disconnect-title" className="text-base font-semibold">
@@ -240,7 +233,7 @@ export default function ContasPage() {
             <ul className="text-sm text-slate-600 dark:text-slate-300 list-disc pl-5 space-y-1">
               <li>O histórico fica: anúncios, produtos e imagens desta conta continuam no sistema.</li>
               <li>Os anúncios desta conta param de ser publicados até reconectar.</li>
-              <li>Reconectar exige autorizar de novo no Mercado Livre.</li>
+              <li>Reconectar exige passar de novo pela autorização do Mercado Livre (o token é apagado só aqui; a autorização do app no ML não é revogada).</li>
             </ul>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setConfirming(null)} disabled={disconnectMutation.isPending}>

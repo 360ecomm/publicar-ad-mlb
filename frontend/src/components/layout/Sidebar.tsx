@@ -75,7 +75,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Rodapé: seller + logout + tema + toggle */}
+      {/* Rodapé: logout + tema + toggle (a conta ativa mora na barra do topo, AccountBar) */}
       <div className="p-2 border-t border-slate-700 space-y-1">
         <button
           onClick={handleLogout}

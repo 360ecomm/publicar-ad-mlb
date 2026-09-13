@@ -127,6 +127,19 @@ docker compose -p publicar-ad-mlb -f docker-compose.prod.yml run --rm backend al
 docker compose -p publicar-ad-mlb -f docker-compose.prod.yml exec backend pytest -q
 ```
 
+> **Ordem de deploy desta branch (`feat/contas-e-seletor`): frontend primeiro,
+> backend depois, `FRONTEND_URL` por último.** Motivo: o backend novo
+> redireciona o retorno do OAuth para `/contas`, rota que o frontend em
+> produção (build anterior) não tem — backend antes do frontend vira 404 numa
+> autorização bem-sucedida; frontend antes é seguro (o retorno antigo
+> `/settings?ml_connected=true` cai no `/settings` novo, que ignora o
+> parâmetro). Depois dos dois: `FRONTEND_URL=https://app.360ecomm.com.br` no
+> `.env` + `up -d --force-recreate backend` (conferir por hash). Migração
+> `b8e2d4f6a1c3` com `alembic upgrade head` antes de subir o backend novo.
+> **Desconectar é esquecimento só local**: apaga o token só aqui; a
+> autorização do app no ML não é revogada (não há chamada a
+> `DELETE /users/{id}/applications/{app_id}`).
+
 > **`docker compose restart` NÃO relê o `env_file`.** As variáveis são fixadas na
 > criação do container. Depois de mudar o `.env`, use
 > `up -d --force-recreate <serviço>`. E confira o resultado **por hash**, não por
@@ -492,10 +505,10 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 > Suíte completa: **562 passed, 82 skipped** sem `TEST_DATABASE_URL`; **644
 > passed** com ela (2026-09-13, medido em `9ff3e55`, branch
 > `feat/contas-e-seletor`). Os 3 arquivos novos acima somam 8 casos de Postgres
-> real ao total de pulados; o restante da diferença em relação aos 69 da
-> branch anterior (`feat/regenerar-posicao`, medidos em `0bd5e11`) vem de casos
-> adicionados a arquivos pré-existentes por outras tarefas desta mesma branch
-> (ex.: `test_ml_oauth_state.py`, `test_serializacao_pos_commit.py`). Baseline
+> real ao total de pulados; a figura anterior de **550 passed, 69 skipped** já
+> estava desatualizada antes mesmo desta branch começar — a base dela media
+> **554 passed, 74 skipped** sem `TEST_DATABASE_URL`. Esta branch soma **8
+> passed** sem banco (mais **8 skipped**) e **100** com banco. Baseline
 > anterior à branch `feat/regenerar-posicao`: **482 passed, 56
 > skipped** sem `TEST_DATABASE_URL`; **538 passed** com ela. Os pulados sem
 > `TEST_DATABASE_URL` são os testes com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py`, `test_migracao_indice_regeneracao.py` e `test_migracao_tokens_anulaveis.py` — e a corrida real de

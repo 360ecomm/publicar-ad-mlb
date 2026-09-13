@@ -189,11 +189,10 @@ export default function SettingsPage() {
       // nova em /contas?ml_connected=true; a lista daqui refaz no foco
       // (refetchOnWindowFocus já está ligado na query "sellers"; o contexto
       // de contas recarrega pelo efeito de foco logo abaixo). Se o pop-up
-      // for bloqueado, cai na mesma aba — avisamos antes de navegar.
-      const destino = await openMLAuthorization()
-      if (destino === "mesma-aba") {
-        toast.info("Pop-up bloqueado: abrindo a autorização nesta aba.")
-      }
+      // for bloqueado, `openMLAuthorization` já navega nesta mesma aba
+      // sozinha — não há o que avisar, a página muda antes de qualquer
+      // toast aparecer.
+      await openMLAuthorization()
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao obter URL de conexão"
       toast.error(message)
