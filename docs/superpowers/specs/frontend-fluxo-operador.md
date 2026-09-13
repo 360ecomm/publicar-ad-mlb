@@ -56,9 +56,14 @@ Aberta a partir de uma linha da fila. Substitui a galeria atual, que foi feita p
 
 ### 3. Atributos
 
-- Mostrar só `is_editable` (calculado no backend). Em MLB7863 isso é 13 de 80.
-- `VEHICLE_TYPE` e outros com a tag `fixed`: mostrar preenchido e sem edição — valor cravado pela categoria, obrigatório mas sem escolha.
-- Atributo sem tags gravadas (linha anterior à migração `e5f9c3b7a2d4`) é editável: na dúvida, mostrar. Anúncio antigo exibirá os 80.
+**Construído em 2026-09-13 (`9a41cc5`).** Regra pura em `lib/attribute-visibility.ts`; a tela é `AttributeForm`.
+
+- Mostrar só `is_editable` (calculado no backend; o frontend consome o booleano). Em MLB7863 isso é 13 de 80.
+- **Exceção: obrigatório não editável aparece.** Escondê-lo tornaria a validação de obrigatórios impossível de satisfazer. Não ocorre em MLB7863 nem em MLB6284 (conferido na API pública em 2026-09-13), mas as tags do ML permitem a combinação, e a regra já a trata.
+- A contagem de ocultos fica visível ("67 campos internos do Mercado Livre ocultos"), para o operador não achar que a tela está incompleta.
+- `VEHICLE_TYPE` e outros com a tag `fixed` (lida de `tags.fixed`; tags nulas nunca são fixas): mostrar preenchido e sem edição — valor cravado pela categoria, obrigatório mas sem escolha. **O backend não pré-preenche o valor** (`_save_attributes` grava a linha com `value_name` nulo), então a tela **semeia** o estado inicial com o único valor permitido e ele segue no PUT com `value_id`, como um select faria.
+- Atributo sem tags gravadas (linha anterior à migração `e5f9c3b7a2d4`) é editável: na dúvida, mostrar. Quando **nenhum** atributo do anúncio tem tags, a tela avisa que a lista está completa por ser anterior à classificação e não esconde nada. É o caso dos 4 anúncios de prova em produção e do SKU 45.
+- Envio e validação não mudaram: o payload continua filtrando por valor preenchido. Campo escondido vazio não entra; campo escondido pré-preenchido pelo backend (ITEM_CONDITION, SELLER_SKU) continua indo, como antes.
 
 ### 4. Importação (bloco C, referência aqui)
 
@@ -83,7 +88,7 @@ Erro de servidor nunca chega cru à tela. O caso conhecido: violação de índic
 
 1. ~~Fila de trabalho (porta de entrada; a revisão abre a partir dela)~~ **Feito em 2026-09-12**: `e176fb2` (camada de API), `41c9d6d` (tela), `2349bb5` (seleção e ações). Quadro removido.
 2. Revisão de imagens
-3. Atributos
+3. ~~Atributos~~ **Feito em 2026-09-13**: `9a41cc5` (filtro por `is_editable`, contagem de ocultos, aviso de anúncio não classificado, campo `fixed` travado).
 4. Bloco C (entrada)
 5. Bloco D (pôr de pé: Dockerfile, compose, Nginx com HTTPS, usuário por operador, limpeza final)
 
@@ -93,6 +98,7 @@ Erro de servidor nunca chega cru à tela. O caso conhecido: violação de índic
 - Promover capa/ficha não gera evento de revisão; a coluna `action` já comporta.
 - Lista de status duplicada: `LISTING_STATUSES` no backend e `ListingStatus` no frontend, sem nada que force sincronia.
 - 8 rotas `/listings/bulk/*` ausentes da lista de endpoints do CLAUDE.md.
+- **Atributo `fixed` com um único valor possível é semeado pela tela.** `_save_attributes` grava `VEHICLE_TYPE` sem valor, e hoje só a tela de atributos o preenche (com o único `allowed_value`). O certo é o **backend** gravá-lo ao criar os atributos, para não depender de cada tela repetir isso — a grade de atributos em massa (`/listings/attributes`), por exemplo, não semeia. É a mesma família da regra escrita longe da fonte da verdade.
 - **Número de posições escrito à mão no frontend.** A marca de "anúncio incompleto" compara `approved_image_count` com **5**, fixo em `WorkQueue.tsx` (`FULL_GALLERY`). O SKU 37, publicado antes do esquema de 5 posições, tem 8 aprovadas — prova de que o número não é universal. Quando existir perfil com outra quantidade de posições, o backend deve informar quantas o perfil espera, e a fila comparar com isso. É a mesma família do bug da aprovação em massa: regra do presente escrita longe da fonte da verdade.
 - **"Estado inválido" pode ficar obscuro em uso real.** Quando o worker avança um anúncio entre a seleção e o clique, o operador lê "estado inválido" sem saber que o anúncio simplesmente andou sozinho. Avaliar um texto mais claro **depois** de Daniel e Gabriel usarem de verdade — decisão que pede dado de uso, não palpite.
 - **"Selecionar tudo deste filtro"** continua fora: exige endpoint de ação em massa por filtro no servidor. Hoje a seleção cobre página por página, e sobrevive à paginação.
