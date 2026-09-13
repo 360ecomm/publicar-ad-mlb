@@ -34,12 +34,15 @@ async def ml_callback(code: str, state: str, db: AsyncSession = Depends(get_db))
     existe transformaria uma conexao bem-sucedida num erro de navegador. Com
     `FRONTEND_URL` definida, volta a redirecionar — o terreno ja fica pronto
     para quando o frontend entrar, sem quebrar o caminho de hoje.
+
+    A tela de contas (/contas) e' quem conecta e desconecta; e' para la que o
+    operador volta.
     """
     await MLOAuthService().handle_callback(code, state, db)
 
     frontend_url = get_settings().frontend_url
     if frontend_url:
         return RedirectResponse(
-            url=f"{frontend_url.rstrip('/')}/settings?ml_connected=true"
+            url=f"{frontend_url.rstrip('/')}/contas?ml_connected=true"
         )
     return {"status": "connected"}

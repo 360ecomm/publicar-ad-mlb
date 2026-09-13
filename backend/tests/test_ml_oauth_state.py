@@ -156,7 +156,7 @@ class TestDestinoAposCallback:
             result = await ml_callback(code="c", state="s", db=AsyncMock())
 
         assert isinstance(result, RedirectResponse)
-        assert result.headers["location"] == "https://app.exemplo.com.br/settings?ml_connected=true"
+        assert result.headers["location"] == "https://app.exemplo.com.br/contas?ml_connected=true"
 
     @pytest.mark.asyncio
     async def test_barra_final_no_frontend_url_nao_duplica(self):
@@ -169,7 +169,7 @@ class TestDestinoAposCallback:
             mock_svc.return_value.handle_callback = AsyncMock()
             result = await ml_callback(code="c", state="s", db=AsyncMock())
 
-        assert "//settings" not in result.headers["location"]
+        assert "//contas" not in result.headers["location"]
 
     @pytest.mark.asyncio
     async def test_localhost_nao_aparece_mais_no_codigo(self):
