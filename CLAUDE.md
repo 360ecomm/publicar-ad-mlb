@@ -43,7 +43,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Robustez do lote (2026-09-10) | ✅ | Lote validado ponta a ponta (T38 e SKU 45 real). Correções: `EMPTY_GTIN_REASON` condicional, título/copy/descrição sem thinking, prefill pelo `domain_discovery`, título preserva tipo de produto, placeholder "Sem marca", `PERFIL_PADRAO` universal (caminho antigo e reuso removidos), standbys `pending_raw_photos` e `pending_ai_engine` com beat, índices únicos dos slots, log `ai_cost`, `gemini-3.8-flash` fixo, fotos brutas jpg/png/webp, write-back no R2 (`asset_key`, sem blob no banco), write-back por seller removido |
 | Rodada 2026-09-11 | ✅ | Lote **para em `ready_to_publish`** depois da aprovação humana (auto-publish removido); `bulk/approve-images` aprova por **posição** (`sort_order < 90` e `ml_picture_id`), não por kind; kind `presentation` → `presentation_ai` (migração de dados); `ImageOut` expõe `kind`/`is_candidate`/`validation_error`; **`listing_review_events`**: 1 evento por aprovação humana, na mesma transação, FK com `ON DELETE CASCADE`; `listing_images.review_seconds` removida; **aprovação que não aprova nada é recusada** nos dois caminhos (individual: 422 antes de qualquer escrita; massa: item falho com `"nenhuma imagem aprovável"`), sem evento, sem mudar status e sem `generate_description`. Provas reais: T38 `7c555deb` (individual), SKU 45 `1b455d45` (massa), T37X `5577e279` (evento), T38 `525001a1` (recusa + aprovação válida) — os quatro em `ready_to_publish`, nunca publicar |
 | Regenerar posição (2026-09-12) | ✅ | `POST /listings/{id}/images/positions/{posicao}/regenerate` (0..4): placeholder `generating` com índice único parcial como trava, task `regenerate_position` preenche no lugar e apaga a anterior não aprovada só no sucesso (DELETE com predicado, avaliado no momento do delete); anúncio fica em `pending_image_approval`; aprovações **e promoções** recusam com 409 próprio durante a regeneração; broker fora ao enfileirar → 503 e placeholder desfeito; custo com `task=image_edit_regen`. **Em `master` e em produção desde `30b5767`** (2026-09-12), migração `a1d7c3e9f5b2` aplicada. **Sem prova real ainda:** produção não tem anúncio em `pending_image_approval` e o endpoint só age nesse status; a prova de ponta a ponta fica para quando a tela de revisão existir. **Pendência:** placeholder preso por worker morto sem nova tentativa não tem saída pelo operador; a proposta registrada é uma varredura periódica pelo beat |
-| Fase 6 | 🔲 | Frontend em produção (Vercel ou na própria VPS) + revisão humana de categoria + **tela de revisão/promoção de candidatos** |
+| Fase 6 | ♻️ | Frontend em produção no mesmo domínio (2026-09-13); faltam revisão humana de categoria e tela de revisão/promoção de candidatos |
 
 > **Railway e Vercel foram descartados para o backend.** A escolha final foi
 > VPS própria, que já hospedava outros apps da 360.
@@ -111,7 +111,7 @@ cd frontend && npm run build  # checar erros TS
 | Diretório do projeto | `/root/publicar-ad-mlb` (fora de qualquer `root` do Nginx) |
 | `.env` de produção | `/root/publicar-ad-mlb/.env`, `600 root:root` — gerado do zero, nada copiado do dev |
 | Porta interna (backend) | `127.0.0.1:8010` → 8000 no container. **Só loopback**; quem fala com ela é o Nginx |
-| Porta interna (frontend) | `127.0.0.1:8011` → 3000 no container. Serviço `frontend` do `docker-compose.prod.yml`, imagem `frontend/Dockerfile.prod` (Node 24 alpine, multi-stage, `output: "standalone"`, non-root `appuser` uid 10001, `mem_limit: 512m`). **Ainda sem vhost**: o Nginx precisa passar a mandar `/api` para 8010 e o resto para 8011 (tarefa 2 do bloco D) |
+| Porta interna (frontend) | `127.0.0.1:8011` → 3000 no container. Serviço `frontend` do `docker-compose.prod.yml`, imagem `frontend/Dockerfile.prod` (Node 24 alpine, multi-stage, `output: "standalone"`, non-root `appuser` uid 10001, `mem_limit: 512m`). **Vhost no ar desde 2026-09-13**: `location /api/` → 8010, `location /` → 8011, bloqueio de `/docs`, `/redoc` e `/openapi.json` nas duas formas (`(/api)?`) por regex; backup do vhost anterior em `/root/backups/vhost-app.360ecomm-20260913.bak` |
 | Vhost | `/etc/nginx/sites-available/app.360ecomm.com.br` |
 | Certificado | Let's Encrypt via `certbot --nginx`, renovação pelo `certbot.timer` já existente |
 | Código | `git pull` via deploy key dedicada (alias SSH `github-admlb`) |
@@ -178,7 +178,9 @@ Chaves relevantes:
   crava o valor nos 3 serviços para não depender do `.env` do servidor.
 - `FRONTEND_URL` — vazia por padrão. Vazia, o callback do OAuth devolve
   `{"status": "connected"}`; preenchida, redireciona para
-  `<FRONTEND_URL>/settings?ml_connected=true`.
+  `<FRONTEND_URL>/contas?ml_connected=true`. Produção precisa de
+  `FRONTEND_URL=https://app.360ecomm.com.br` no `.env` + `up -d --force-recreate
+  backend` (tarefa de deploy própria).
 - `ALLOWED_ORIGINS` — é `list[str]`, o pydantic-settings **só aceita JSON**.
   `ALLOWED_ORIGINS=https://x` derruba o boot com `SettingsError`; a forma certa é
   `ALLOWED_ORIGINS=["https://x"]`. Em produção está **omitida** de propósito.
@@ -386,7 +388,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 ### backend/app/models/
 - `base.py` — Base, TimestampMixin
 - `user.py` — User
-- `seller.py` — Seller (access_token_enc, refresh_token_enc, token_expires_at)
+- `seller.py` — Seller (access_token_enc, refresh_token_enc, token_expires_at). Os dois tokens são anuláveis desde a migração `b8e2d4f6a1c3`: desconectar apaga só o token, mantém a linha
 - `user_seller_access.py` — UserSellerAccess (user_id, seller_id, role) — tabela N:N
 - `product.py` — Product (sku, description, brand, **model**, ean, ncm, fiscal, físico, custo)
 - `listing.py` — Listing (sku_external_id, sku_description, sku_brand, **sku_model**, price, status, ...) + **`approved_image_count`**, uma `column_property` com subconsulta correlata em `listing_images` (`approved` e `sort_order < CANDIDATE_SORT_ORDER_FLOOR`): sai na **mesma** consulta de qualquer `select(Listing)`, então a listagem de 200 continua em 2 statements e os endpoints que fazem `ListingSummary.model_validate(listing)` recebem o valor sem consulta a mais. **Não** usar `deferred=True`: no async o carregamento tardio estoura `MissingGreenlet` na serialização. Objeto `Listing(...)` criado em memória e nunca carregado tem o atributo `None` (testes com listing falso passam `approved_image_count=0`)
@@ -408,11 +410,12 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 ### backend/app/services/
 - `auth_service.py` — login, refresh token
 - `ml_oauth_service.py` — OAuth ML, troca code→token, refresh token ML
+- `seller_service.py` — `SellerService.disconnect()`: apaga só os dois tokens e marca `is_active = False`, mantém todo o histórico; idempotente
 - `ai/base.py`, `ai/gemini.py`, `ai/claude.py`, `ai/prompts.py`, `ai/service.py` — providers de IA
 - `category_service.py` — CategoryService: prediz categoria ML + salva atributos; pré-preenche BRAND, MODEL, GTIN, SELLER_SKU, dimensões, peso com unidades corretas
 - `listing_service.py` — ListingService: CRUD + pipeline
 - `image_service.py` — MLPictureService + `validate_image()` + `ensure_dimensions()` (upscale para 1024px antes do upload) + `ImageRateLimitError` (HTTP 429 → backoff 60s×2^retries)
-- `publish_service.py` — PublishService + `get_valid_access_token()` + MLValidationError
+- `publish_service.py` — PublishService + `get_valid_access_token()` + MLValidationError + `SellerDisconnectedError` (RuntimeError; seller inativo ou sem token, levantada antes de qualquer `decrypt_value`)
 - `product_service.py` — ProductService (multi-tenant via `_base_query()`): list, get, create, update, upsert
 - `product_import_service.py` — parser CSV/XLSX de produtos (auto-detect delimitador)
 - `batch_import_service.py` — parser CSV/XLSX de anúncios (auto-detect delimitador)
@@ -482,16 +485,21 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `test_regenerar_posicao_worker.py` — `_gerar_posicao` isolada (uma chamada, kind da posição, `alvo` preenchido em vez de linha nova, QA reprovado guarda evidência, posição 0 com fallback dentro do alvo / em linha nova quando o alvo já virou `validation_failed`, `com_copy`/`com_campos` não pagam LLM nem consultam atributos, ValueError fora de 0..4), `_carregar_fotos_brutas`, e a orquestração de `_regenerate_position_async` com mocks (sucesso apaga anteriores e rotula custo, matriz `com_campos`/`com_copy` por posição, motor não produz → `generation_failed` mantendo a anterior, QA reprova mantém as duas, `ImageEngineUnavailableError` → rollback + `generation_failed` sem standby, fotos ausentes, skipped por placeholder consumido/inexistente/anúncio que saiu do status, `_mark_regen_failed` — inclusive o truncamento em 200 chars, registro da task na fila `images`), a remoção das anteriores por **DELETE com predicado** (`approved IS false` no SQL emitido; nenhum DELETE nos caminhos de falha/QA/skipped), `rowcount` menor que os ids capturados vira `removidas=0` + `anteriores_preservadas=1` no log, placeholder fora de 0..4 descartado sem gastar, pré-requisito ausente das posições 1/2/4 com motivo próprio sem chamar o motor, e `ImageEngineUnavailableError` truncado (35)
 - `test_regenerar_posicao_service.py` — sem banco: `regenerate_position` recusa fora de `pending_image_approval` antes de consultar, 422 fora de 0..4, 409 em posição aprovada sem placeholder nem enfileirar, commit ANTES do `delay`, kind por posição, `IntegrityError` → 409 próprio; rota declarada com 202 e `ImageOut`; `approve_images` 409 com mensagem própria e sem escrita; `bulk_approve_images` item falho (cerca `NOT EXISTS` dentro do UPDATE, que continua o 2º statement), "nenhuma imagem aprovável" preservado, caminho normal sem consulta extra; `delay` que estoura (broker fora) apaga o placeholder e devolve 503; `recusar_se_regeneracao_em_andamento` levanta 409 com a mensagem das aprovações e roda **antes** da promoção nos dois endpoints (`promote-cover`/`promote-specs`), que não promovem quando ela recusa (25)
 - `test_regenerar_posicao_pg.py` — Postgres real (só com `TEST_DATABASE_URL`): substitui só a posição pedida e rotula o custo; falha do motor mantém a anterior e o status; posição 0 cai no fallback; aprovada recusada; duplo disparo gera um placeholder; aprovações bloqueadas com zero eventos; worker apaga só a não aprovada (aprovada e candidata 90 sobrevivem); **anterior aprovada DURANTE a geração sobrevive** (o `_edit` aprova `p2` numa sessão paralela: `removidas=0`, duas linhas na posição 2, `anteriores_preservadas=1` no log); aprovação que venceu a corrida faz o worker apagar o placeholder (9)
+- `test_migracao_tokens_anulaveis.py` — migração `b8e2d4f6a1c3`: encadeia no head e vocabulário do model (sem banco); Postgres real: upgrade/downgrade dos dois `NOT NULL`, downgrade com linha NULL preenche `''` antes de recriar a restrição (2 + 2 PG)
+- `test_token_seller_desconectado.py` — guarda de `get_valid_access_token`: seller inativo, sem `access_token_enc` e sem `refresh_token_enc` recusam com `SellerDisconnectedError` antes de qualquer `decrypt_value`; seller ativo com os dois tokens devolve o token; é `RuntimeError` (5)
+- `test_desconectar_seller.py` — rota existe (sem banco); Postgres real: apaga os dois tokens e preserva as 5 contagens (listings, products, listing_images, listing_review_events, user_seller_access), idempotente, 404 sem acesso não mexe em nada, conta desconectada aparece na lista de sellers e no dashboard com `is_active=false`, uso como `X-Seller-ID` é recusado com 403, callback do OAuth reativa com token novo (1 + 6 PG)
 
-> Suíte completa: **550 passed, 69 skipped** sem `TEST_DATABASE_URL`; **619
-> passed** com ela (2026-09-12, medido em `0bd5e11`, branch
-> `feat/regenerar-posicao`). Os 69 pulados são os 56 antigos de Postgres real
-> mais os 4 de `test_migracao_indice_regeneracao.py` e os 9 de
-> `test_regenerar_posicao_pg.py`. Nenhum teste pré-existente mudou — só os 5
-> arquivos novos listados acima. Baseline anterior à branch: **482 passed, 56
+> Suíte completa: **562 passed, 82 skipped** sem `TEST_DATABASE_URL`; **644
+> passed** com ela (2026-09-13, medido em `9ff3e55`, branch
+> `feat/contas-e-seletor`). Os 3 arquivos novos acima somam 8 casos de Postgres
+> real ao total de pulados; o restante da diferença em relação aos 69 da
+> branch anterior (`feat/regenerar-posicao`, medidos em `0bd5e11`) vem de casos
+> adicionados a arquivos pré-existentes por outras tarefas desta mesma branch
+> (ex.: `test_ml_oauth_state.py`, `test_serializacao_pos_commit.py`). Baseline
+> anterior à branch `feat/regenerar-posicao`: **482 passed, 56
 > skipped** sem `TEST_DATABASE_URL`; **538 passed** com ela. Os pulados sem
-> `TEST_DATABASE_URL` são os testes com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py` e `test_migracao_indice_regeneracao.py` — e a corrida real de
-> `test_promocao_indice_unico.py` e `test_regenerar_posicao_pg.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
+> `TEST_DATABASE_URL` são os testes com Postgres real (`test_bulk_approve_por_posicao.py`, `test_eventos_de_revisao.py`, `test_recusa_aprovacao_vazia.py`, `test_listagem_em_escala.py`, os de migração — incluindo `test_migracao_indice_listagem.py`, `test_migracao_indice_regeneracao.py` e `test_migracao_tokens_anulaveis.py` — e a corrida real de
+> `test_promocao_indice_unico.py`, `test_regenerar_posicao_pg.py` e `test_desconectar_seller.py`), que só rodam com `TEST_DATABASE_URL` apontando para o banco
 > local dedicado `publicar_test` (ver memória do projeto). O `conftest` põe o broker do Celery em
 > `memory://`, então a suíte pode rodar dentro da imagem de produção sem enfileirar nada no Redis real.
 > Os testes reais fazem `drop_all`/`create_all` no `publicar_test` e são donos exclusivos dele — nunca rodar duas suítes (ou uma suíte e um arquivo avulso) contra ele ao mesmo tempo; a colisão aparece como `DBAPIError` em `DROP TABLE`.
@@ -514,7 +522,8 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `d4e8b2a6f9c1` — índice composto `ix_listings_seller_status_created` (seller_id, status, created_at DESC)
 - `e5f9c3b7a2d4` — `listing_attributes.tags` (JSONB nullable, sem preenchimento retroativo: linhas antigas ficam NULL = editáveis)
 - `f7b3e9c1d2a5` — índices simples em `listing_id` de `listing_images` (`ix_listing_images_listing_id`, coexiste com os dois parciais de slot), `listing_titles` e `listing_jobs`. As outras 4 FKs sem índice (`listings.created_by`, `batch_imports.created_by`, `listing_review_events.user_id`, `batch_import_rows.listing_id`) ficaram de fora de propósito: nenhuma consulta filtra por elas (ver docstring da migração)
-- `a1d7c3e9f5b2` — índice único parcial `uq_listing_images_generating_slot` (trava do placeholder de regeneração). **Antes de aplicar em produção**, auditar `SELECT listing_id, sort_order, status, count(*) FROM listing_images WHERE status = 'generating' GROUP BY 1,2,3`: linha legada com `generating` viraria um 409 falso de "regeneração em andamento" e duas na mesma posição derrubam o `CREATE UNIQUE INDEX` (head atual)
+- `a1d7c3e9f5b2` — índice único parcial `uq_listing_images_generating_slot` (trava do placeholder de regeneração). **Antes de aplicar em produção**, auditar `SELECT listing_id, sort_order, status, count(*) FROM listing_images WHERE status = 'generating' GROUP BY 1,2,3`: linha legada com `generating` viraria um 409 falso de "regeneração em andamento" e duas na mesma posição derrubam o `CREATE UNIQUE INDEX`
+- `b8e2d4f6a1c3` — `sellers.access_token_enc` e `sellers.refresh_token_enc` passam a anuláveis: desconexão apaga só o token, mantém a linha. Downgrade preenche `''` nas linhas com NULL antes de devolver o NOT NULL (head atual)
 
 ---
 
@@ -705,8 +714,9 @@ PUT    /api/v1/listings/bulk/attribute                   preenche um atributo em
 GET    /api/v1/listings/bulk/attributes                  linhas da grade de atributos em massa
 
 GET    /api/v1/health                                    sem auth: status do banco e do redis
-GET    /api/v1/dashboard                                 painel de contas (/): um item por seller com contagem por status
+GET    /api/v1/dashboard                                 painel de contas (/contas): um item por seller com contagem por status, inclusive desconectadas (`is_active` por entrada)
 GET    /api/v1/sellers                                   contas ML que o usuário acessa
+POST   /api/v1/sellers/{seller_id}/disconnect            desconecta a conta ML: apaga só os dois tokens, mantém o histórico; idempotente; 404 sem acesso; usa `get_current_user` (não `get_active_seller`)
 GET    /api/v1/sellers/image-config                      raw_base_url do seller ativo (bucket público de fotos brutas)
 PUT    /api/v1/sellers/image-config                      cria/atualiza a raw_base_url
 GET    /api/v1/title-configs                             regras de título por grupo de produto do seller
@@ -744,7 +754,8 @@ Rodar com `npm run dev` dentro de `frontend/`. Porta: `http://localhost:3000`
 
 | Rota | Página |
 |---|---|
-| `/` | Painel de contas: um card por seller conectado com contagem por status, botão "Usar" e link para a fila (`app/(dashboard)/page.tsx`) |
+| `/` | Redireciona para `/listings` |
+| `/contas` | Painel de contas: um card por seller (inclusive desconectadas, com badge "Desconectada" e "Reconectar"), Conectar em aba nova, Desconectar com confirmação, Usar (`app/(dashboard)/contas/page.tsx`) |
 | `/listings` | **Fila de trabalho** (substituiu o kanban, removido em `2349bb5`): abre filtrada em "Esperando você", barra de resumo com três blocos (Processando / Esperando você / Concluído) vinda de `status-counts`, busca com atraso de 300 ms, paginação de 50, **sem** atualização automática (botão Atualizar), seleção que sobrevive à paginação e ao filtro, ações em massa derivadas do status dos selecionados (Publicar exige confirmação com a lista de SKUs). Clique na linha vai à etapa que espera ação; o SKU é sempre atalho para o detalhe |
 | `/listings/attributes` | Grade de atributos em massa (`AttributeGridEditor`), destino do botão "Preencher atributos" da fila |
 | `/products` | Catálogo de produtos (tabela com zebra striping, expansão fiscal, editar por linha) |
@@ -762,7 +773,7 @@ Rodar com `npm run dev` dentro de `frontend/`. Porta: `http://localhost:3000`
 | `/login` | Login por e-mail e senha |
 
 **UX:**
-- Topbar removida; título em cada página; seletor de seller no rodapé da sidebar
+- `Topbar.tsx` apagado; barra de conta fixa no topo do conteúdo (`AccountBar.tsx`), não no menu — o menu abre recolhido (só ícones) e o seletor que vivia no rodapé sumia com o nome da conta
 - Transição suave entre páginas: `key={pathname}` com `animate-in fade-in duration-200`
 - Títulos em PT-BR sentence case
 
@@ -774,8 +785,15 @@ Rodar com `npm run dev` dentro de `frontend/`. Porta: `http://localhost:3000`
 > A marca "Incompleto (n/5)" compara `approved_image_count` com 5 fixo no frontend — pendência
 > registrada no spec (o SKU 37 tem 8 aprovadas).
 
+> **Contas e seletor (2026-09-13):** `SellerContext` expõe `sellers` (todas, inclusive
+> desconectadas, para `/contas`) e `connectedSellers` (só ativas — as únicas que podem
+> virar a conta ativa, já que `get_active_seller` recusa `X-Seller-ID` inativo com 403) e
+> nunca escolhe conta inativa como ativa. `AccountBar.tsx` fica em `(dashboard)/layout.tsx`,
+> acima do conteúdo; trocar de conta faz `queryClient.resetQueries()`.
+
 **Arquivos frontend críticos:**
-- `src/components/layout/Sidebar.tsx` — sidebar com SellerSelector embutido
+- `src/components/layout/Sidebar.tsx` — menu lateral; item Anúncios → `/listings`, Contas → `/contas`
+- `src/components/layout/AccountBar.tsx` — barra fixa no topo do conteúdo (em `(dashboard)/layout.tsx`); seletor só com contas ativas (`connectedSellers`); trocar de conta faz `queryClient.resetQueries()`
 - `src/components/listings/WorkQueue.tsx` — a fila: contagens, filtro, busca, tabela, seleção (estado próprio em `Map`), estados de erro e vazio
 - `src/components/listings/StatusSummaryBar.tsx` — os três blocos da barra de resumo; o selecionado expande por status; item "Outros" para status legado
 - `src/components/listings/BulkActionsBar.tsx` — barra fixa de ações em massa, derivadas do status dos selecionados; seleção mista sem ação; diálogo de confirmação só para Publicar
