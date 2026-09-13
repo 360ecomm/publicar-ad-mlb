@@ -51,11 +51,20 @@ function SellerCard({ entry, onDisconnect }: { entry: SellerDashboardEntry; onDi
           <div className="flex items-center gap-2 min-w-0">
             <ShoppingBag className={`w-4 h-4 flex-shrink-0 ${entry.is_active ? "text-yellow-500" : "text-slate-400"}`} />
             <CardTitle className="text-base truncate">{entry.ml_nickname}</CardTitle>
+            {/* Dois rótulos, duas perguntas diferentes, e por isso nenhum
+                deles se chama "ativa": SELECIONADA responde "é a conta em que
+                estou agindo agora?" (o X-Seller-ID das chamadas); CONECTADA
+                responde "o token do ML ainda está aqui?" (`is_active` no
+                banco). Um cartão pode ser as duas coisas ao mesmo tempo, e
+                o de conexão aparece SEMPRE — sem ele, uma conta conectada e
+                não selecionada não dizia nada sobre si. */}
             {isActive && (
-              <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Ativa</span>
+              <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Selecionada</span>
             )}
-            {!entry.is_active && (
-              <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Desconectada</span>
+            {entry.is_active ? (
+              <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Conectada</span>
+            ) : (
+              <span className="text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">Desconectada</span>
             )}
           </div>
           {entry.is_active && !isActive && seller && (

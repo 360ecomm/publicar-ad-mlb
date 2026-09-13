@@ -6,7 +6,13 @@ import { ShoppingBag } from "lucide-react"
 import { useSeller } from "@/contexts/SellerContext"
 
 /**
- * Barra fixa no topo do conteúdo: a conta ativa, sempre visível.
+ * Barra fixa no topo do conteúdo: a conta selecionada, sempre visível.
+ *
+ * "Selecionada", não "ativa": em /contas o cartão precisa distinguir a conta
+ * em que se está agindo (esta) da conta que ainda tem token do ML
+ * ("Conectada", `is_active`). Duas perguntas diferentes não podem dividir a
+ * mesma palavra. No código o nome continua `activeSeller`, que é o vocabulário
+ * do header X-Seller-ID.
  *
  * Fica no conteúdo, não no menu lateral, porque o menu abre recolhido
  * (só ícones) — o seletor que vivia no rodapé dele sumia com o nome da
@@ -26,7 +32,7 @@ export function AccountBar() {
       className="h-12 flex-shrink-0 border-b border-border bg-background/95 backdrop-blur px-6 flex items-center gap-3 text-sm"
     >
       <ShoppingBag className={`w-4 h-4 flex-shrink-0 ${activeSeller ? "text-yellow-500" : "text-slate-400"}`} />
-      <span className="text-slate-500">Conta ativa:</span>
+      <span className="text-slate-500">Conta selecionada:</span>
 
       {isLoading ? (
         <span className="text-slate-400">carregando…</span>
@@ -45,7 +51,7 @@ export function AccountBar() {
         <span className="font-medium text-foreground">{activeSeller.ml_nickname}</span>
       ) : (
         <select
-          aria-label="Conta ativa"
+          aria-label="Conta selecionada"
           value={activeSeller.id}
           onChange={(e) => {
             const next = connectedSellers.find((s) => s.id === e.target.value)

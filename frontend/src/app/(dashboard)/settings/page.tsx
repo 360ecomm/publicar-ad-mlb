@@ -284,13 +284,20 @@ export default function SettingsPage() {
                       <div className="flex items-center gap-2 min-w-0">
                         <CheckCircle className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-green-600" : "text-slate-400"}`} />
                         <span className="font-medium text-foreground truncate">{seller.ml_nickname}</span>
+                        {/* Mesmo vocabulário de /contas: SELECIONADA é a conta
+                            em que se está agindo; CONECTADA é ter token do ML
+                            (`is_active`). O de conexão aparece sempre. */}
                         {isActive && (
                           <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full flex-shrink-0">
-                            Ativa
+                            Selecionada
                           </span>
                         )}
-                        {!seller.is_active && (
+                        {seller.is_active ? (
                           <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full flex-shrink-0">
+                            Conectada
+                          </span>
+                        ) : (
+                          <span className="text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full flex-shrink-0">
                             Desconectada
                           </span>
                         )}
