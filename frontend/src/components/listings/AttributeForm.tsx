@@ -10,7 +10,8 @@ import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
 import { ChevronDown, Info, Loader2 } from "lucide-react"
 import type { AttributeOut } from "@/types/listing"
-import { classifyAttributes, fixedValue, isFixed } from "@/lib/attribute-visibility"
+import { classifyAttributes, fixedValue } from "@/lib/attribute-visibility"
+import { fieldKindFor, matchSuggestion } from "@/lib/attribute-field"
 
 interface AttributeValue {
   value_id?: string
@@ -202,6 +203,15 @@ interface FieldProps {
 }
 
 function AttributeField({ attr, value, onSelectChange, onTextChange }: FieldProps) {
+  // Quem decide o tipo de campo é o `attribute_type`, não a existência de
+  // sugestões — ver `lib/attribute-field`.
+  const kind = fieldKindFor(attr)
+  const sugestoesId = `${attr.attribute_id}-sugestoes`
+  const valorProprio =
+    kind === "suggestions" &&
+    !!value?.value_name?.trim() &&
+    matchSuggestion(attr.allowed_values, value.value_name) === null
+
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline gap-2 flex-wrap">
@@ -214,7 +224,7 @@ function AttributeField({ attr, value, onSelectChange, onTextChange }: FieldProp
         </span>
       </div>
 
-      {isFixed(attr) ? (
+      {kind === "fixed" ? (
         <Input
           id={attr.attribute_id}
           value={value?.value_name ?? ""}
@@ -222,7 +232,7 @@ function AttributeField({ attr, value, onSelectChange, onTextChange }: FieldProp
           disabled
           aria-readonly="true"
         />
-      ) : attr.allowed_values && attr.allowed_values.length > 0 ? (
+      ) : kind === "closed-list" ? (
         <select
           id={attr.attribute_id}
           value={value?.value_id ?? ""}
@@ -233,12 +243,35 @@ function AttributeField({ attr, value, onSelectChange, onTextChange }: FieldProp
           className="flex h-9 w-full rounded-md border border-input bg-background text-foreground px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <option value="">Selecione...</option>
-          {attr.allowed_values.map((opt) => (
+          {attr.allowed_values!.map((opt) => (
             <option key={opt.id} value={opt.id}>
               {opt.name}
             </option>
           ))}
         </select>
+      ) : kind === "suggestions" ? (
+        <>
+          <Input
+            id={attr.attribute_id}
+            list={sugestoesId}
+            value={value?.value_name ?? ""}
+            onChange={(e) => {
+              // Casou com uma sugestão: grava `value_id` + o nome EXATO do ML.
+              // Valor novo: grava só o nome, sem id — é o que a documentação
+              // do ML prescreve e o que o backend espera.
+              const texto = e.target.value
+              const casou = matchSuggestion(attr.allowed_values, texto)
+              if (casou) onSelectChange(attr.attribute_id, casou.id, casou.name)
+              else onTextChange(attr.attribute_id, texto)
+            }}
+            placeholder={`Digite ${attr.attribute_name.toLowerCase()} ou escolha uma sugestão`}
+          />
+          <datalist id={sugestoesId}>
+            {attr.allowed_values!.map((opt) => (
+              <option key={opt.id} value={opt.name} />
+            ))}
+          </datalist>
+        </>
       ) : (
         <Input
           id={attr.attribute_id}
@@ -248,12 +281,30 @@ function AttributeField({ attr, value, onSelectChange, onTextChange }: FieldProp
         />
       )}
 
-      {isFixed(attr) ? (
+      {kind === "fixed" ? (
         <p className="text-xs text-slate-400">Valor definido pela categoria; não pode ser alterado.</p>
       ) : (
-        attr.source === "ai" && attr.value_name && (
-          <p className="text-xs text-slate-400">Sugerido pela IA — confirme ou altere</p>
-        )
+        <>
+          {kind === "suggestions" && (
+            <p className="text-xs text-slate-400">
+              {valorProprio ? (
+                <>
+                  Valor próprio, fora das {attr.allowed_values!.length} sugestões do Mercado Livre —
+                  aceito nesta categoria.
+                </>
+              ) : (
+                <>
+                  {attr.allowed_values!.length}{" "}
+                  {attr.allowed_values!.length === 1 ? "sugestão" : "sugestões"} do Mercado Livre;
+                  digite outro valor se o seu não estiver na lista.
+                </>
+              )}
+            </p>
+          )}
+          {attr.source === "ai" && attr.value_name && (
+            <p className="text-xs text-slate-400">Sugerido pela IA — confirme ou altere</p>
+          )}
+        </>
       )}
     </div>
   )
