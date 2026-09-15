@@ -289,9 +289,36 @@ obrigatórios ficam preenchidos: é o gêmeo em lote de `submit_attributes`
   `duplicated_fields`, o aviso da duplicação `MODEL`/`BRAND`.
 - `ready_to_publish` ganha, no detalhe, o botão "Regerar descrição".
 
-**Fora do escopo:** o botão de regenerar posição. A tela de revisão de imagens
-por posição (bloco B) não existe ainda, e é ela que deve oferecê-lo. O painel
-de aviso leva para `/listings/[id]/images`.
+**Correção de premissa (2026-09-15, onda final).** O parágrafo original desta
+seção dizia: *"Fora do escopo: o botão de regenerar posição. A tela de revisão
+de imagens por posição (bloco B) não existe ainda, e é ela que deve
+oferecê-lo."* **A afirmação estava errada.** A tela existe desde `9b3f41a`, em
+`master` — `frontend/src/lib/image-review.ts` e os componentes que a consomem
+(`ImageGallery.tsx`, `listings/[id]/images/page.tsx`). Foi essa premissa falsa
+que deixou a Task 5 (regenerar posição a partir de `ready_to_publish`) sem
+nenhum caminho pela interface: o backend passou a aceitar, mas
+`canRegenerate` só liberava o botão em posição NÃO aprovada, e em
+`ready_to_publish` as 5 estão aprovadas — zero botões.
+
+O que a onda final fez, então:
+
+- `canRegenerate(slot, listingStatus)` — em `pending_image_approval` nada
+  mudou (posição aprovada continua sem botão); em `ready_to_publish` a
+  posição aprovada **ganha** botão, porque o backend aceita.
+- `regenerateWarning(position, listingStatus)` passou a devolver
+  `{ short, long }` e avisa, antes do clique, que regenerar dali desfaz a
+  aprovação daquela posição, devolve o anúncio à revisão de imagens e que a
+  reaprovação regera a descrição. Continua avisando sobre a copy da posição 2;
+  os dois avisos se somam quando valem juntos.
+- `describeRegenerateError` voltou a casar o 409 de status: a Task 5 mudou o
+  backend de `"apenas no status"` para `"apenas nos status"` (plural) e o
+  casamento por texto quebrou em silêncio, mostrando nome interno de status ao
+  operador. O casamento agora para antes do número gramatical e há teste com
+  as duas formas (`frontend/src/lib/__tests__/image-review.test.ts`).
+- `AttributeEditWarning` deixou de ter dicionário próprio de nomes de posição
+  (usa `POSITION_LABELS`) e passou a numerar como a galeria (API conta de 0, a
+  tela de 1). O link para `/listings/[id]/images` agora leva a um lugar com
+  botão de verdade.
 
 ---
 
@@ -321,6 +348,9 @@ exclusivo). `conftest.py` bloqueia rede real na suíte inteira.
 1. **`MODEL`/`sku_model` e `BRAND`/`sku_brand` em duplicata.** Os atributos
    alimentam a ficha (posição 4); as colunas do listing alimentam a
    apresentação (posição 1). Corrigir um não corrige o outro. Erro invisível.
-2. **Botão de regenerar posição** depende da tela de revisão (bloco B).
+2. ~~**Botão de regenerar posição** depende da tela de revisão (bloco B).~~
+   **Resolvido na onda final de 2026-09-15** — a tela de revisão já existia
+   (`9b3f41a`); o botão foi liberado em `ready_to_publish`. Ver "Correção de
+   premissa" na seção Frontend.
 3. **Placeholder `generating` preso** por worker morto continua sem saída
    self-service — agora também bloqueia o `PATCH`.

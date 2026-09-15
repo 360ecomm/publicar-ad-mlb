@@ -48,11 +48,26 @@ precisa de um botão "gerar de novo" por posição.
    a nova linha subiu ao ML (`status="uploaded"`, por IA ou pelo fallback da
    capa). Apagam-se as linhas **não aprovadas** que ocupavam a posição
    **antes** da regeneração começar (ids capturados no início; linhas criadas
-   pela própria regeneração, como o fallback, nunca são apagadas). Nunca
-   apagar linha aprovada — em `pending_image_approval` a chamada já foi
-   recusada antes; vindo de `ready_to_publish` (Task 5, 2026-09-15) a linha
-   já foi desaprovada antes de chegar aqui, então também nunca está entre as
-   apagadas. O `asset_key` de cada linha apagada vai para o log.
+   pela própria regeneração, como o fallback, nunca são apagadas). O
+   DELETE apaga **exatamente** o que o predicado alcança: `sort_order` da
+   posição **e** `approved IS false`
+   (`backend/app/workers/tasks/image_tasks.py:831`).
+
+   Daí o comportamento nos dois status:
+   - `pending_image_approval`: a linha aprovada nunca é apagada porque a
+     chamada já foi recusada com 409 antes de chegar ao worker.
+   - `ready_to_publish` (Task 5, 2026-09-15): o endpoint **desaprova** a linha
+     antes de enfileirar — e é justamente isso que a torna apagável. No
+     sucesso ela **é apagada**. (Uma versão anterior deste parágrafo afirmava
+     o contrário, que ela "também nunca está entre as apagadas"; estava
+     errado, e quem construísse em cima teria contado com uma garantia
+     inexistente.) O que a regeneração nunca apaga é linha que esteja
+     aprovada **no momento do DELETE** — por isso o predicado é reavaliado
+     ali, e não nos objetos carregados no início: se um humano aprovar a
+     linha antiga durante os minutos de geração, ela sobrevive e sai
+     `anteriores_preservadas=N` no log.
+
+   O `asset_key` de cada linha apagada vai para o log.
    - Falha do motor (nenhuma imagem produzida): placeholder vira
      `status="generation_failed"` com o motivo em `validation_error`; a
      anterior permanece.
