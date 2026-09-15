@@ -24,9 +24,11 @@ import {
   ExternalLink,
   CheckCircle,
   AlertCircle,
+  AlertTriangle,
   RefreshCw,
   Trash2,
 } from "lucide-react"
+import { useState } from "react"
 import Link from "next/link"
 import type { ListingStatus } from "@/types/listing"
 import { PROCESSING_STATUSES, STATUS_LABELS } from "@/types/listing"
@@ -121,6 +123,13 @@ export default function ListingDetailPage() {
     },
   })
 
+  // Regerar a descrição custa e pode custar caro: a chamada à IA é paga, e se
+  // ela falhar as 3 tentativas o worker marca o anúncio como `failed` — um
+  // anúncio pronto para publicar sai da fila por um erro que não tem relação
+  // com o que o operador estava corrigindo. Confirmar antes não é cerimônia:
+  // é a única chance de contar isso a ele.
+  const [confirmingRegenDescription, setConfirmingRegenDescription] = useState(false)
+
   const regenerateDescriptionMutation = useMutation({
     mutationFn: () => regenerateDescription(id),
     onSuccess: () => {
@@ -131,6 +140,7 @@ export default function ListingDetailPage() {
     onError: (err: Error) => {
       toast.error(err.message || "Erro ao regerar descrição")
     },
+    onSettled: () => setConfirmingRegenDescription(false),
   })
 
   const deleteMutation = useMutation({
@@ -381,7 +391,7 @@ export default function ListingDetailPage() {
               variant="outline"
               className="w-full mt-2"
               disabled={regenerateDescriptionMutation.isPending}
-              onClick={() => regenerateDescriptionMutation.mutate()}
+              onClick={() => setConfirmingRegenDescription(true)}
             >
               {regenerateDescriptionMutation.isPending ? (
                 <>
@@ -397,6 +407,47 @@ export default function ListingDetailPage() {
             </p>
           </CardContent>
         </Card>
+      )}
+
+      {confirmingRegenDescription && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="regen-desc-confirm-title"
+        >
+          <div className="w-full max-w-md rounded-lg bg-background p-5 shadow-lg">
+            <h2 id="regen-desc-confirm-title" className="text-base font-semibold">
+              Regerar a descrição deste anúncio?
+            </h2>
+            <p className="mt-2 flex items-start gap-2 text-sm text-amber-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                A descrição será reescrita do zero pela IA, e isso <strong>gasta uma
+                chamada paga</strong>. Se a IA falhar, o anúncio sai de &quot;Pronto para
+                publicar&quot; e vai para &quot;Com erro&quot; — de lá ele volta pelo botão
+                &quot;Tentar novamente&quot;.
+              </span>
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmingRegenDescription(false)}
+                disabled={regenerateDescriptionMutation.isPending}
+              >
+                Voltar
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => regenerateDescriptionMutation.mutate()}
+                disabled={regenerateDescriptionMutation.isPending}
+              >
+                {regenerateDescriptionMutation.isPending ? "Enviando..." : "Regerar descrição"}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {status === "published" && (
