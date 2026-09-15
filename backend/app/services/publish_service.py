@@ -119,7 +119,7 @@ class PublishService:
         images: list,
         description_html: str | None,
         access_token: str,
-    ) -> str:
+    ) -> tuple[str, str]:
         attrs_payload = [
             {"id": a.attribute_id, "value_id": a.value_id, "value_name": a.value_name}
             if a.value_id
@@ -167,7 +167,7 @@ class PublishService:
             "listing_type_id": listing.listing_type_id,
             "pictures": pics_payload,
             "attributes": attrs_payload,
-            "status": "paused",
+            "status": "active",
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -221,18 +221,24 @@ class PublishService:
         item_data = resp.json()
         item_id = item_data["id"]
 
-        await self._ensure_paused(item_id, item_data, access_token)
+        estado_final = await self._aguardar_validacao(item_id, item_data, access_token)
 
         if description_html:
             await self._post_description(item_id, description_html, access_token)
 
-        return item_id
+        return item_id, estado_final
 
-    async def _ensure_paused(self, item_id: str, item_data: dict, access_token: str) -> None:
-        """O ML reativa o item sozinho ao concluir a validação assíncrona das fotos
-        (sub_status picture_download_pending), ignorando o status enviado na criação.
-        Aguarda a validação terminar e força status=paused de novo no final."""
-        status_value = item_data.get("status")
+    async def _aguardar_validacao(self, item_id: str, item_data: dict, access_token: str) -> str:
+        """Espera a validação assíncrona das fotos terminar e devolve o
+        status final do item no ML ('active', 'paused', 'under_review'...).
+
+        NÃO força status nenhum. O passo 0 de feat/publicar-ativo provou que
+        o ML ignora o status pedido na criação e decide sozinho ao fim da
+        validação — o PUT que existia aqui só desfazia essa decisão.
+        Se a validação não terminar dentro da janela (5 × 2 s), devolve o
+        último estado visto: é foto do momento, não destino final.
+        """
+        status_value = item_data.get("status") or ""
         sub_status = item_data.get("sub_status") or []
 
         for _ in range(5):
@@ -248,18 +254,10 @@ class PublishService:
                 logger.warning("Falha ao checar status do item %s: %s", item_id, resp.text[:200])
                 break
             item_data = resp.json()
-            status_value = item_data.get("status")
+            status_value = item_data.get("status") or ""
             sub_status = item_data.get("sub_status") or []
 
-        if status_value != "paused":
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.put(
-                    f"{ML_ITEMS_URL}/{item_id}",
-                    json={"status": "paused"},
-                    headers={"Authorization": f"Bearer {access_token}"},
-                )
-            if resp.status_code >= 400:
-                logger.warning("Falha ao forçar pausa do item %s: %s", item_id, resp.text[:300])
+        return status_value
 
     async def _post_description(self, item_id: str, html: str, access_token: str) -> None:
         plain = re.sub(r"<[^>]+>", " ", html)

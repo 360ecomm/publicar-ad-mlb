@@ -1,7 +1,7 @@
 """Substituicao da lista de fotos de um item JA publicado no ML.
 
 Ate aqui o codigo so sabia CRIAR item (`publish`, um POST) e mudar status
-(`activate_listing`/`_ensure_paused`, PUT de um campo so). Trocar foto de
+(`activate_listing`/`_aguardar_validacao`, PUT de um campo so). Trocar foto de
 anuncio no ar era script manual.
 
 A regra que estes testes travam: o PUT de `pictures` no ML e SUBSTITUICAO

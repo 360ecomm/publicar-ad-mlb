@@ -95,7 +95,7 @@ class TestPublicacaoUsaFamilyNameQuandoExigido:
 
         with patch("httpx.AsyncClient") as cli, \
              _sem_teto_de_categoria(), \
-             patch.object(PublishService, "_ensure_paused", new_callable=AsyncMock), \
+             patch.object(PublishService, "_aguardar_validacao", new_callable=AsyncMock, return_value="active"), \
              patch.object(PublishService, "_post_description", new_callable=AsyncMock, create=True):
             client = cli.return_value.__aenter__.return_value
             client.post = AsyncMock(side_effect=respostas)
@@ -133,7 +133,7 @@ class TestPublicacaoUsaFamilyNameQuandoExigido:
 
         with patch("httpx.AsyncClient") as cli, \
              _sem_teto_de_categoria(), \
-             patch.object(PublishService, "_ensure_paused", new_callable=AsyncMock):
+             patch.object(PublishService, "_aguardar_validacao", new_callable=AsyncMock, return_value="active"):
             client = cli.return_value.__aenter__.return_value
             client.post = AsyncMock(return_value=ok)
             await svc.publish(_listing(), _attrs(), _imgs(), "<p>desc</p>", "token")

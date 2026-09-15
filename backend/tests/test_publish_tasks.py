@@ -76,10 +76,13 @@ class TestPublishListingIdempotency:
                  return_value="token",
              ) as mock_token_fn, \
              patch("app.services.publish_service.PublishService") as mock_publish_cls:
-            mock_publish_cls.return_value.publish = AsyncMock(return_value="MLB123")
+            # feat/publicar-ativo: publish() devolve (item_id, estado_final_ml) —
+            # ver test_publicar_ativo.py para o mapeamento completo de estado.
+            mock_publish_cls.return_value.publish = AsyncMock(return_value=("MLB123", "active"))
             result = await _publish_listing_async("lid")
 
         assert result != {"listing_id": "lid", "skipped": True}
         mock_token_fn.assert_called_once()
         mock_publish_cls.return_value.publish.assert_called_once()
         assert mock_listing.mlb_id == "MLB123"
+        assert mock_listing.status == "published"

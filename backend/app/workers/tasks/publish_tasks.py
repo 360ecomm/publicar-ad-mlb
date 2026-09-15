@@ -1,6 +1,23 @@
 import asyncio
+import logging
 
 from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+
+def _status_apos_publicacao(estado_ml: str) -> str:
+    """Traduz o status final do item no ML para o vocabulário local.
+
+    'active' é o caminho feliz. 'under_review' é moderação do ML (o caso do
+    SKU 37). Qualquer outra coisa — 'paused' inclusive, que deixou de ser o
+    fluxo normal em feat/publicar-ativo — é anomalia e cai em
+    published_paused, de onde o operador reativa pela tela."""
+    if estado_ml == "active":
+        return "published"
+    if estado_ml == "under_review":
+        return "published_under_review"
+    return "published_paused"
 
 
 async def _publish_listing_async(listing_id: str) -> dict:
@@ -54,7 +71,7 @@ async def _publish_listing_async(listing_id: str) -> dict:
 
         access_token = await get_valid_access_token(seller, db)
 
-        mlb_id = await PublishService(db).publish(
+        mlb_id, estado_ml = await PublishService(db).publish(
             listing=listing,
             attributes=list(attributes),
             images=list(images),
@@ -63,7 +80,13 @@ async def _publish_listing_async(listing_id: str) -> dict:
         )
 
         listing.mlb_id = mlb_id
-        listing.status = "published_paused"
+        novo_status = _status_apos_publicacao(estado_ml)
+        if novo_status != "published":
+            logger.warning(
+                "publish_estado_nao_ativo listing_id=%s mlb_id=%s estado_ml=%s status_local=%s",
+                listing_id, mlb_id, estado_ml or "?", novo_status,
+            )
+        listing.status = novo_status
         await db.commit()
 
         # A entrega das fotos no bucket proprio do seller (RF7, `r2_write_service`)
