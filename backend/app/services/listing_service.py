@@ -40,12 +40,24 @@ from app.services.attribute_impact import snapshot_attributes, stale_positions
 logger = logging.getLogger(__name__)
 
 
-def _mensagem_regeneracao_em_andamento(posicoes: list[int]) -> str:
-    """Bloqueio das aprovacoes enquanto ha placeholder `generating`. Mensagem
-    PROPRIA, nao "estado invalido": o operador precisa saber que e'
-    temporario e qual posicao esta sendo refeita."""
+# Verbo que fecha a frase de bloqueio para quem esta CORRIGINDO atributo. O
+# padrao ("aprovar") serve as aprovacoes e as promocoes; aqui nao ha nada a
+# aprovar, e mandar "aguarde ... antes de aprovar" para quem clicou em
+# "Salvar correção" faz o operador procurar um botao que aquela tela nao tem.
+ACAO_CORRIGIR_ATRIBUTOS = "corrigir os atributos"
+
+
+def _mensagem_regeneracao_em_andamento(posicoes: list[int], *, acao: str = "aprovar") -> str:
+    """Bloqueio enquanto ha placeholder `generating`. Mensagem PROPRIA, nao
+    "estado invalido": o operador precisa saber que e' temporario e qual
+    posicao esta sendo refeita.
+
+    `acao` fecha a frase com o que ELE estava tentando fazer. O padrao
+    ("aprovar") e' o texto historico das aprovacoes e das promocoes, casado
+    por texto em testes — nao mudar.
+    """
     lista = ", ".join(str(p) for p in posicoes)
-    return f"Regeneração em andamento na posição {lista}; aguarde a conclusão antes de aprovar."
+    return f"Regeneração em andamento na posição {lista}; aguarde a conclusão antes de {acao}."
 
 
 # Atributos do ML que existem EM DUPLICATA no sistema: o atributo alimenta a
@@ -404,8 +416,11 @@ class ListingService:
             )
         # Mesma trava das aprovacoes e das promocoes: o worker da regeneracao
         # vai reler os atributos para montar a posicao, entao editar agora
-        # decide por sorteio qual versao do texto entra na imagem.
-        await self.recusar_se_regeneracao_em_andamento(listing)
+        # decide por sorteio qual versao do texto entra na imagem. A mensagem,
+        # porem, e' propria: o operador esta corrigindo, nao aprovando.
+        await self.recusar_se_regeneracao_em_andamento(
+            listing, acao=ACAO_CORRIGIR_ATRIBUTOS
+        )
 
         atributos = (await self.db.execute(
             select(ListingAttribute).where(ListingAttribute.listing_id == listing.id)
@@ -720,14 +735,20 @@ class ListingService:
             )
         return placeholder
 
-    async def recusar_se_regeneracao_em_andamento(self, listing: Listing) -> None:
-        """409 com a mensagem das aprovacoes enquanto houver placeholder `generating`.
+    async def recusar_se_regeneracao_em_andamento(
+        self, listing: Listing, *, acao: str = "aprovar"
+    ) -> None:
+        """409 enquanto houver placeholder `generating`.
 
         Usado pelos endpoints de promocao (`promote_cover`/`promote_specs`):
         promover aprova uma linha, e `promote_cover` rebaixa quem ocupa
         `sort_order` 0 — inclusive o placeholder `cover_ai` da regeneracao, que
         iria parar em 90. O worker, ao terminar, encontraria o placeholder fora
         do esquema de 5 posicoes.
+
+        Usado tambem por `edit_attributes`, que passa `acao` proprio: o texto
+        precisa falar da acao que o operador tentou, nao de aprovar. Ver
+        `_mensagem_regeneracao_em_andamento`.
         """
         posicoes = sorted(
             (
@@ -742,7 +763,7 @@ class ListingService:
         if posicoes:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=_mensagem_regeneracao_em_andamento(posicoes),
+                detail=_mensagem_regeneracao_em_andamento(posicoes, acao=acao),
             )
 
     async def regenerate_description(self, listing: Listing) -> None:

@@ -109,9 +109,29 @@ class TestRegeneracaoEmAndamento:
                 user_id=uuid.uuid4(),
             )
         assert exc.value.status_code == 409
-        assert "aguarde a conclusão antes de aprovar" in exc.value.detail
+        # Mensagem PROPRIA da correcao: quem esta aqui nao esta aprovando
+        # nada. O texto das aprovacoes ("...antes de aprovar") mandaria o
+        # operador procurar um botao que esta tela nao tem.
+        assert exc.value.detail == (
+            "Regeneração em andamento na posição 2; aguarde a conclusão antes de "
+            "corrigir os atributos."
+        )
+        assert "antes de aprovar" not in exc.value.detail
         db.add.assert_not_called()
         db.commit.assert_not_awaited()
+
+    def test_mensagem_das_aprovacoes_continua_intacta(self):
+        """O verbo novo e' SO do caminho da correcao: o texto historico das
+        aprovacoes e das promocoes nao pode mudar junto."""
+        from app.services.listing_service import _mensagem_regeneracao_em_andamento
+
+        assert _mensagem_regeneracao_em_andamento([2]) == (
+            "Regeneração em andamento na posição 2; aguarde a conclusão antes de aprovar."
+        )
+        assert _mensagem_regeneracao_em_andamento([0, 4], acao="corrigir os atributos") == (
+            "Regeneração em andamento na posição 0, 4; aguarde a conclusão antes de "
+            "corrigir os atributos."
+        )
 
 
 class TestRecusaAntesDeEscrever:
