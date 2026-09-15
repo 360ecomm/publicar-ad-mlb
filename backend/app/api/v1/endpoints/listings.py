@@ -12,6 +12,7 @@ from app.models.listing_attribute import ListingAttribute
 from app.models.listing_job import ListingJob
 from app.models.listing_image import ListingImage
 from app.schemas.listing import (
+    AttributesEditResponse,
     ImageApproveRequest,
     ImageOut,
     ListingCreate,
@@ -226,6 +227,35 @@ async def submit_attributes(
     listing = await svc.get_or_404(listing_id, active_seller.id)
     await svc.submit_attributes(listing, [a.model_dump() for a in body.attributes])
     return await svc.summary_after_commit(listing)
+
+
+@router.patch("/{listing_id}/attributes", response_model=AttributesEditResponse)
+async def edit_attributes(
+    listing_id: UUID,
+    body: AttributesSubmitRequest,
+    active_seller=Depends(get_active_seller),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Corrige atributo já gravado, SEM avançar a etapa do anúncio.
+
+    O `PUT` da mesma rota é o passo de preenchimento (tolera obrigatório
+    vazio e decide o status seguinte); este é o de correção, e recusa
+    obrigatório vazio. 409 fora dos status editáveis ou com regeneração de
+    imagem em andamento; 422 para valor fora da enumeração, obrigatório
+    esvaziado ou edição que não muda nada. Nenhuma task é enfileirada.
+    Ver `ListingService.edit_attributes`.
+    """
+    svc = ListingService(db)
+    listing = await svc.get_or_404(listing_id, active_seller.id)
+    stale, duplicados = await svc.edit_attributes(
+        listing, [a.model_dump() for a in body.attributes], user_id=current_user.id
+    )
+    return AttributesEditResponse(
+        listing=await svc.summary_after_commit(listing),
+        stale_positions=stale,
+        duplicated_fields=duplicados,
+    )
 
 
 @router.post("/{listing_id}/pipeline/generate_images", response_model=ListingSummary)

@@ -165,6 +165,28 @@ class ImageApproveRequest(BaseModel):
     review_seconds: Optional[int] = Field(default=None, ge=0)
 
 
+class AttributesEditResponse(BaseModel):
+    """Resposta do PATCH de correcao de atributos.
+
+    Mora aqui, e nao em `schemas/attribute.py`, porque embute
+    `ListingSummary` — e `attribute.py` nao importa este modulo hoje.
+
+    `stale_positions`: posicoes do esquema de 5 cujo texto IMPRESSO NA IMAGEM
+    nao corresponde mais ao banco. So avisa (opcao A do spec): regenerar
+    sozinho gastaria chamada paga sem decisao humana. Vazio quando o anuncio
+    ainda nao tem imagem gerada.
+
+    `duplicated_fields`: atributos editados que existem em duplicata no
+    sistema (`BRAND`/`sku_brand`, `MODEL`/`sku_model`). O atributo alimenta a
+    ficha (posicao 4); a coluna do listing alimenta a apresentacao (posicao
+    1). Corrigir um nao corrige o outro — a tela avisa.
+    """
+
+    listing: ListingSummary
+    stale_positions: list[int] = []
+    duplicated_fields: list[str] = []
+
+
 class ListingDetail(ListingSummary):
     # `sku_description`, `ml_category_id` e `approved_image_count` vem de
     # ListingSummary (a contagem sai na mesma linha do listing, sem consulta
