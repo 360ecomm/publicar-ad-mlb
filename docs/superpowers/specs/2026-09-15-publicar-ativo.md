@@ -58,6 +58,10 @@ continuam como estão.
   anúncio fica `published_paused` mesmo que o ML o ative minutos depois — o
   operador confere no ML e reativa o rótulo local não é destino final errado,
   é foto do momento. Alongar a espera não entrou no escopo.
+- **Limitação conhecida (2):** o `estado_ml` gravado é a foto tirada ANTES do
+  `POST /description` (a ordem interna de `publish()` não mudou); se o envio
+  da descrição algum dia mudar o estado do item no ML, o status local nasce
+  desatualizado. Registrado na revisão da Task 2; sem mudança de código.
 - **Branch a partir do HEAD atual de `master` (`c816332`)**, não do `44b1c92`
   citado no pedido: o commit a mais é só documentação (pendência da predição
   de categoria) e já está em master.
