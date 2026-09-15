@@ -161,7 +161,7 @@ class TestRecusaAntesDeEscrever:
         from app.services.listing_service import ListingService
 
         # value_id="123" de proposito: a fabrica ja nasceria com None, entao
-        # sem um valor inicial a asserção abaixo nao provaria que o `edit_attributes`
+        # sem um valor inicial a assercao abaixo nao provaria que o `edit_attributes`
         # de fato apagou o value_id — so que ele "continuou None".
         alvo = _attr("FLAVOR", "Chocolate", value_id="123")
         db = _db([alvo])
@@ -190,17 +190,27 @@ class TestRecusaAntesDeEscrever:
     @pytest.mark.asyncio
     async def test_valor_id_gravado_nao_entra_na_comparacao_de_mudanca(self):
         """Caso real (CLAUDE.md): BRAND em MLB6284 e' `string` com
-        `allowed_values` de SUGESTOES. MLB5145387291 esta ativo com
-        `value_id='13065330'` `value_name='Wepink'` — id que o proprio ML
-        atribuiu. O formulario reenvia so o `value_name` (sem id); comparar
-        tambem por `value_id` marcaria isso como mudanca e apagaria um
-        `value_id` valido. Sem este teste, `attr.value_name != value_name or
-        attr.value_id != value_id` passaria nos outros 27 casos sem ser pego."""
+        `allowed_values` de SUGESTOES, e "Wepink" NAO esta entre elas.
+        MLB5145387291 esta ativo com `value_id='13065330'`
+        `value_name='Wepink'` — id que o proprio ML atribuiu na epoca.
+
+        `allowed_values` aqui NAO pode conter o par gravado (id/nome de
+        Wepink): se contivesse, `_validar_valor` casaria por nome e
+        resolveria `value_id` de volta para "13065330" — o predicado certo
+        (so `value_name`) e o mutante (`... or attr.value_id != value_id`)
+        dariam o MESMO resultado (422 nos dois), e o teste passaria mesmo com
+        a regressao reintroduzida. Sem a marca na lista de sugestoes,
+        `attribute_type == "string"` faz `_validar_valor` devolver o
+        `value_id` BRUTO submetido — aqui `None`, porque o formulario manda
+        so o nome — e so ai o mutante e o predicado certo discordam
+        (None != "13065330"): o mutante veria mudanca e apagaria o
+        `value_id` valido; o certo nao.
+        """
         from app.services.listing_service import ListingService
 
         alvo = _attr(
             "BRAND", "Wepink", value_id="13065330",
-            allowed=[{"id": "13065330", "name": "Wepink"}],
+            allowed=[{"id": "1", "name": "Natura"}, {"id": "2", "name": "Avon"}],
         )
         db = _db([alvo])
         with pytest.raises(HTTPException) as exc:
