@@ -13,6 +13,7 @@ from app.models.base import Base
 # conjunto de valores.
 # --------------------------------------------------------------------------
 REVIEW_ACTION_IMAGES_APPROVED = "images_approved"
+REVIEW_ACTION_ATTRIBUTES_EDITED = "attributes_edited"
 REVIEW_MODE_INDIVIDUAL = "individual"
 REVIEW_MODE_BULK = "bulk"
 
@@ -26,20 +27,27 @@ class ListingReviewEvent(Base):
     Sem `updated_at` e sem `TimestampMixin` de proposito: um evento e'
     imutavel, nao ha "atualizar" um registro de auditoria.
 
-    `approved_count` conta coisas diferentes conforme o `mode`, e os dois
-    numeros nao sao comparaveis entre si. Em `individual`, e' a contagem de
-    todo id que o operador mandou e que pertence ao listing (o loop dentro de
-    `approve_images`) — pode incluir uma linha reprovada em QA ou uma
-    candidata que o operador escolheu de proposito. Em `bulk`, e' o
-    `rowcount` do UPDATE em massa, restrito a
-    `sort_order < CANDIDATE_SORT_ORDER_FLOOR AND ml_picture_id IS NOT NULL`.
+    `approved_count` conta os ITENS DA ACAO, e o que e' um item depende de
+    `action` e de `mode`. Os numeros nao sao comparaveis entre si:
 
-    `approved_count` e' sempre >= 1, nos dois modos. Aprovacao que nao
-    aprova nada nao e' aprovacao: `approve_images` recusa com 422 quando
-    nenhum id pertence ao listing, e `bulk_approve_images` falha o item
-    (`"nenhuma imagem aprovável"`) quando o UPDATE nao atinge nenhuma linha
-    — ex.: toda posicao reprovada no QA. Nos dois casos nao ha evento, o
-    status nao muda e `generate_description` nao e' disparado.
+      images_approved / individual  contagem de todo id que o operador mandou
+                                    e que pertence ao listing (o laco de
+                                    `approve_images`) — pode incluir uma linha
+                                    reprovada em QA ou uma candidata escolhida
+                                    de proposito
+      images_approved / bulk        `rowcount` do UPDATE em massa, restrito a
+                                    `sort_order < CANDIDATE_SORT_ORDER_FLOOR
+                                    AND ml_picture_id IS NOT NULL`
+      attributes_edited / individual  quantos atributos MUDARAM de valor de
+                                    fato em `edit_attributes` (reenviar o
+                                    mesmo valor nao conta)
+
+    `approved_count` e' sempre >= 1, em toda combinacao. Acao que nao faz
+    nada nao e' acao: `approve_images` recusa com 422 quando nenhum id
+    pertence ao listing, `bulk_approve_images` falha o item
+    ("nenhuma imagem aprovavel") quando o UPDATE nao atinge nenhuma linha, e
+    `edit_attributes` recusa com 422 quando nenhum valor mudaria. Nos tres
+    casos nao ha evento, o status nao muda e nenhuma task e' disparada.
     """
 
     __tablename__ = "listing_review_events"

@@ -34,6 +34,49 @@ LISTING_STATUSES: tuple[str, ...] = (
     "failed",
 )
 
+# Status em que um atributo JA GRAVADO pode ser corrigido
+# (`ListingService.edit_attributes`). Mora aqui, ao lado de
+# `LISTING_STATUSES`, pelo mesmo motivo de `POSITION_KINDS` em
+# `listing_image.py`: mais de um call site precisa concordar com o MESMO
+# conjunto.
+#
+# Os sete de fora nao sao esquecimento — em cinco deles um worker esta lendo
+# os atributos neste exato momento:
+#   generating_title       atributos ainda nao existem (nascem em
+#                          `predicting_category`)
+#   predicting_category    `_save_attributes` faz DELETE de TODOS e reinsere:
+#                          a edicao sumiria EM SILENCIO. O operador salva, ve
+#                          "salvo", e o valor some.
+#   generating_images      o worker le os atributos uma vez POR POSICAO —
+#                          editar no meio da galeria mista: posicao 1 com o
+#                          volume velho, posicao 4 com a ficha nova
+#   generating_description `_generate_description_async` le os atributos para
+#                          montar o prompt
+#   publishing             `publish_tasks` le os atributos para o payload do
+#                          ML: a edicao iria ao ar sem revisao nenhuma, ou
+#                          derrubaria a publicacao com 422 no momento mais caro
+#   published /            editar anuncio NO AR e' pendencia futura, com
+#   published_paused       regras proprias (o ML tem API de update)
+EDITABLE_ATTRIBUTE_STATUSES: frozenset[str] = frozenset({
+    "draft",
+    "pending_title_approval",
+    "pending_seller_attributes",
+    "pending_description",
+    "pending_raw_photos",
+    "pending_ai_engine",
+    "pending_image_approval",
+    "ready_to_publish",
+    "failed",
+})
+
+# Status que aceitam regenerar UMA posicao de imagem. `ready_to_publish`
+# entrou porque e' onde o operador mais descobre o erro — na revisao final.
+# Ver `ListingService.regenerate_position` para o que muda em cada um.
+REGENERABLE_POSITION_STATUSES: frozenset[str] = frozenset({
+    "pending_image_approval",
+    "ready_to_publish",
+})
+
 
 class Listing(Base, TimestampMixin):
     __tablename__ = "listings"
