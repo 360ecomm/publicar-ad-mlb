@@ -119,7 +119,13 @@ export default function ImagesPage() {
       {/* `key={id}`: ao ir ao próximo anúncio pela mesma rota, a galeria nasce
           do zero (seleção, cronômetro, painel de originais) em vez de herdar
           o estado do anterior. */}
-      <ImageGallery key={id} listingId={id} sku={listing.sku_external_id} images={listing.images} />
+      <ImageGallery
+        key={id}
+        listingId={id}
+        sku={listing.sku_external_id}
+        status={listing.status}
+        images={listing.images}
+      />
     </div>
   )
 }

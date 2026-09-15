@@ -26,12 +26,18 @@ import { useReviewTimer } from "@/hooks/useReviewTimer"
 import { RawPhotosPanel } from "@/components/listings/RawPhotosPanel"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { ImageOut, ListingDetail } from "@/types/listing"
+import type { ImageOut, ListingDetail, ListingStatus } from "@/types/listing"
 
 interface Props {
   listingId: string
   /** SKU do anúncio, para o aviso "SKU X: n imagens aprovadas". */
   sku: string | null
+  /**
+   * Status do anúncio: decide se a posição APROVADA pode ser regenerada.
+   * Em `ready_to_publish` o backend aceita (desaprova a posição e devolve o
+   * anúncio à revisão); em `pending_image_approval` recusa com 409.
+   */
+  status: ListingStatus
   images: ImageOut[]
 }
 
@@ -48,7 +54,7 @@ interface Props {
  * periódica da página, só enquanto houver `generating`), ver as fotos
  * originais sob demanda, e ir direto ao próximo anúncio depois de aprovar.
  */
-export function ImageGallery({ listingId, sku, images }: Props) {
+export function ImageGallery({ listingId, sku, status, images }: Props) {
   const router = useRouter()
   const queryClient = useQueryClient()
 
@@ -152,15 +158,17 @@ export function ImageGallery({ listingId, sku, images }: Props) {
   }
 
   const handleRegenerate = (slot: GallerySlot) => {
-    if (!canRegenerate(slot) || regen.isPending) return
-    // Benefícios (posição 2): a copy é pedida de novo ao LLM e o texto do
-    // card pode mudar. O operador precisa saber ANTES de gastar a chamada.
-    if (regenerateWarning(slot.position)) setConfirmingRegen(slot.position)
+    if (!canRegenerate(slot, status) || regen.isPending) return
+    // Dois motivos de aviso, que podem valer juntos: Benefícios (posição 2)
+    // pede copy nova ao LLM, e a partir de `ready_to_publish` regenerar
+    // desfaz a aprovação e devolve o anúncio à revisão. O operador precisa
+    // saber ANTES de gastar a chamada.
+    if (regenerateWarning(slot.position, status)) setConfirmingRegen(slot.position)
     else regen.mutate(slot.position)
   }
 
   const ausentes = slots.every((s) => s.state === "missing")
-  const regenAviso = confirmingRegen === null ? null : regenerateWarning(confirmingRegen)
+  const regenAviso = confirmingRegen === null ? null : regenerateWarning(confirmingRegen, status)
 
   return (
     <div className="space-y-6">
@@ -182,6 +190,7 @@ export function ImageGallery({ listingId, sku, images }: Props) {
           <SlotCard
             key={slot.position}
             slot={slot}
+            listingStatus={status}
             selected={slot.image !== null && selected.has(slot.image.id)}
             onToggle={() => toggle(slot)}
             onRegenerate={() => handleRegenerate(slot)}
@@ -280,7 +289,7 @@ export function ImageGallery({ listingId, sku, images }: Props) {
             </h2>
             <p className="mt-2 flex items-start gap-2 text-sm text-amber-800">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              {regenAviso}
+              {regenAviso.long}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setConfirmingRegen(null)} disabled={regen.isPending}>
@@ -306,6 +315,7 @@ const STATE_TEXT: Record<Exclude<GallerySlot["state"], "ready">, string> = {
 
 function SlotCard({
   slot,
+  listingStatus,
   selected,
   onToggle,
   onRegenerate,
@@ -313,6 +323,8 @@ function SlotCard({
   regenDisabled,
 }: {
   slot: GallerySlot
+  /** Ver `canRegenerate`: a posição aprovada só regenera em `ready_to_publish`. */
+  listingStatus: ListingStatus
   selected: boolean
   onToggle: () => void
   onRegenerate: () => void
@@ -323,7 +335,8 @@ function SlotCard({
 }) {
   const pronta = slot.state === "ready" && slot.image?.ml_picture_id
   const clicavel = slot.state === "ready"
-  const regeneravel = canRegenerate(slot)
+  const regeneravel = canRegenerate(slot, listingStatus)
+  const regenAviso = regenerateWarning(slot.position, listingStatus)
 
   return (
     <div
@@ -418,8 +431,8 @@ function SlotCard({
             {regenerating ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
             Regenerar
           </Button>
-          {regenerateWarning(slot.position) && (
-            <p className="mt-1 text-[11px] leading-snug text-amber-700">O texto do card pode mudar.</p>
+          {regenAviso && (
+            <p className="mt-1 text-[11px] leading-snug text-amber-700">{regenAviso.short}</p>
           )}
         </div>
       )}

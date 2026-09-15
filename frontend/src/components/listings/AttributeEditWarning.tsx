@@ -3,21 +3,28 @@
 import Link from "next/link"
 import { AlertTriangle } from "lucide-react"
 import type { AttributesEditResponse } from "@/types/listing"
+import { POSITION_LABELS, isGalleryPosition } from "@/lib/image-review"
 
-const NOME_DA_POSICAO: Record<number, string> = {
-  0: "capa",
-  1: "apresentação",
-  2: "benefícios",
-  3: "detalhe",
-  4: "ficha técnica",
+/**
+ * Nome e número da posição na convenção da TELA, não na da API: a API conta
+ * de 0 e a tela de 1 (ver `describeRegenerateError` em lib/image-review).
+ * Um número que não bate com o da galeria manda o operador para a posição
+ * errada. Os rótulos são os de `POSITION_LABELS` — uma definição só; o
+ * dicionário próprio que existia aqui já divergia ("detalhe" × "Detalhes").
+ */
+function rotuloDaPosicao(p: number): string {
+  return isGalleryPosition(p) ? `${p + 1} (${POSITION_LABELS[p]})` : `${p + 1}`
 }
 
 /**
  * Aviso depois de uma correção: o que ficou divergente entre banco e imagem.
  *
  * Só avisa — regenerar por conta própria gastaria chamada paga sem decisão
- * humana. O botão de regenerar posição mora na tela de revisão de imagens,
- * que ainda não existe (bloco B); até lá o caminho é o link da galeria.
+ * humana. Quem regenera é o operador, pelo botão "Regenerar" de cada posição
+ * na tela de revisão de imagens (`/listings/[id]/images`), que é para onde o
+ * link abaixo leva. Em `ready_to_publish` esse botão aparece também nas
+ * posições já aprovadas: regenerar dali desfaz a aprovação daquela posição e
+ * devolve o anúncio à revisão (ver `canRegenerate`).
  */
 export function AttributeEditWarning({
   listingId,
@@ -38,7 +45,7 @@ export function AttributeEditWarning({
             <div>
               <p className="font-medium">
                 Esta correção mudou texto impresso {stale.length === 1 ? "na imagem" : "nas imagens"}{" "}
-                {stale.map((p) => `${p} (${NOME_DA_POSICAO[p] ?? "posição"})`).join(", ")}.
+                {stale.map(rotuloDaPosicao).join(", ")}.
               </p>
               <p className="mt-1">
                 A imagem é o que o comprador vê. Regere{" "}

@@ -1,4 +1,4 @@
-import type { ImageOut, ListingSummary, RawPhotosOut } from "@/types/listing"
+import type { ImageOut, ListingStatus, ListingSummary, RawPhotosOut } from "@/types/listing"
 import { sanitizeBulkError } from "./bulk-actions"
 
 /**
@@ -64,7 +64,12 @@ function coverOriginOf(position: number, image: ImageOut | null): GallerySlot["c
   return null
 }
 
-function isGalleryPosition(n: number): n is GalleryPosition {
+/**
+ * Exportado porque `stale_positions` do PATCH de atributos chega como
+ * `number[]` cru do backend e precisa virar rótulo pela MESMA tabela
+ * (`POSITION_LABELS`) que a galeria usa — ver `AttributeEditWarning`.
+ */
+export function isGalleryPosition(n: number): n is GalleryPosition {
   return (GALLERY_POSITIONS as readonly number[]).includes(n)
 }
 
@@ -173,22 +178,65 @@ export function mlPictureUrl(mlPictureId: string): string {
 /**
  * Regenerar só faz sentido numa posição que não serviu: reprovada no QA,
  * falhou ao gerar ou nunca gerada. `ready` não regenera (o operador desmarca
- * e aprova o resto), `generating` já está em regeneração, e imagem aprovada
- * nunca é substituída por trás do operador (o backend recusa com 409).
+ * e aprova o resto) e `generating` já está em regeneração.
+ *
+ * A posição APROVADA depende do status do anúncio, porque o backend passou a
+ * depender dele (`REGENERABLE_POSITION_STATUSES`, 2026-09-15):
+ * - `pending_image_approval`: continua recusada com 409 — imagem aprovada não
+ *   é substituída por trás do operador.
+ * - `ready_to_publish`: o backend **aceita**, desaprova só aquela posição e
+ *   devolve o anúncio a `pending_image_approval`. Não é "por trás do
+ *   operador": é o clique dele, e `regenerateWarning` avisa o que vai
+ *   acontecer. Sem o botão aqui, a única forma de corrigir uma imagem depois
+ *   da revisão final seria regenerar as cinco.
+ *
+ * Por isso a assinatura pede o status: só o slot não basta.
  */
-export function canRegenerate(slot: GallerySlot): boolean {
-  if (slot.image?.approved) return false
+export function canRegenerate(slot: GallerySlot, listingStatus: ListingStatus): boolean {
+  if (slot.state === "generating") return false
+  if (slot.image?.approved) return listingStatus === "ready_to_publish"
   return slot.state === "qa_failed" || slot.state === "generation_failed" || slot.state === "missing"
 }
 
+/** Aviso de regeneração em duas medidas: `short` cabe no rodapé do card, `long` é o texto do diálogo. */
+export interface RegenerateWarning {
+  short: string
+  long: string
+}
+
 /**
- * Só a posição 2 (Benefícios) tem texto vindo do LLM: regenerar pede copy
- * nova, e o card pode sair com bullets diferentes dos que o operador já leu.
- * As outras posições têm legenda fixa (perfil) ou bullets determinísticos.
+ * O que o operador precisa saber ANTES de gastar a chamada. Dois motivos,
+ * independentes, que podem valer ao mesmo tempo:
+ *
+ * - **Posição 2 (Benefícios)**: é a única com texto vindo do LLM. Regenerar
+ *   pede copy nova, e o card pode sair com bullets diferentes dos que ele
+ *   acabou de ler. As outras têm legenda fixa (perfil) ou bullets
+ *   determinísticos.
+ * - **`ready_to_publish`**: o backend desaprova aquela posição e devolve o
+ *   anúncio a `pending_image_approval`. Ele perde a aprovação, vai ter que
+ *   aprovar de novo — e a reaprovação regera a descrição. Custo real, e
+ *   invisível se ninguém disser.
  */
-export function regenerateWarning(position: GalleryPosition): string | null {
-  if (position !== 2) return null
-  return "Regenerar os Benefícios pede um texto novo à IA: o texto do card pode mudar, não só a imagem."
+export function regenerateWarning(
+  position: GalleryPosition,
+  listingStatus: ListingStatus,
+): RegenerateWarning | null {
+  const longas: string[] = []
+  const curtas: string[] = []
+  if (listingStatus === "ready_to_publish") {
+    longas.push(
+      `Este anúncio já está pronto para publicar. Regenerar ${POSITION_LABELS[position]} desfaz a aprovação dessa posição e devolve o anúncio para a revisão de imagens: você vai precisar aprovar as imagens de novo, e a descrição é gerada de novo na reaprovação.`,
+    )
+    curtas.push("Desfaz a aprovação e volta para a revisão.")
+  }
+  if (position === 2) {
+    longas.push(
+      "Regenerar os Benefícios pede um texto novo à IA: o texto do card pode mudar, não só a imagem.",
+    )
+    curtas.push("O texto do card pode mudar.")
+  }
+  if (longas.length === 0) return null
+  return { short: curtas.join(" "), long: longas.join(" ") }
 }
 
 /**
@@ -208,7 +256,15 @@ export function describeRegenerateError(
   if (status === 409) {
     if (lower.includes("em andamento")) return `${label} já está sendo regenerada; aguarde ela terminar.`
     if (lower.includes("já está aprovada")) return `${label} já está aprovada e não é regenerada.`
-    if (lower.includes("apenas no status")) {
+    // Casar mensagem do backend por texto é frágil POR NATUREZA — não há
+    // código de erro por caso, só o `detail`. Este trecho já quebrou uma vez:
+    // o casamento era `"apenas no status"` e o backend passou a dizer
+    // `"apenas nos status"` (plural, porque agora são dois), então o operador
+    // via o texto cru com os nomes internos que esta função existe para
+    // esconder. O recorte abaixo para ANTES do ponto que muda — o número
+    // gramatical — e resiste às duas formas sem casar nada mais largo. O teste
+    // em `__tests__/image-review.test.ts` cobre as duas.
+    if (lower.includes("disponível apenas n")) {
       return "Este anúncio saiu da revisão de imagens (outra ação ou o sistema avançou). Recarregue a tela."
     }
   }
