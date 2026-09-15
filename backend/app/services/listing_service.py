@@ -6,7 +6,12 @@ from sqlalchemy import select, update, func, or_
 from sqlalchemy import update as sa_update, delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
-from app.models.listing import LISTING_STATUSES, Listing
+from app.models.listing import (
+    EDITABLE_ATTRIBUTE_STATUSES,
+    LISTING_STATUSES,
+    REGENERABLE_POSITION_STATUSES,
+    Listing,
+)
 from app.models.listing_title import ListingTitle
 from app.models.listing_attribute import ListingAttribute
 from app.models.listing_description import ListingDescription
@@ -19,6 +24,7 @@ from app.models.listing_image import (
     ListingImage,
 )
 from app.models.listing_review_event import (
+    REVIEW_ACTION_ATTRIBUTES_EDITED,
     REVIEW_ACTION_IMAGES_APPROVED,
     REVIEW_MODE_BULK,
     REVIEW_MODE_INDIVIDUAL,
@@ -29,6 +35,7 @@ from app.models.user import User
 from app.models.seller import Seller
 from app.schemas.listing import ListingCreate, ListingPage, ListingStatusCounts, ListingSummary
 from app.schemas.bulk import BulkItemResult, BulkResult
+from app.services.attribute_impact import snapshot_attributes, stale_positions
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +46,14 @@ def _mensagem_regeneracao_em_andamento(posicoes: list[int]) -> str:
     temporario e qual posicao esta sendo refeita."""
     lista = ", ".join(str(p) for p in posicoes)
     return f"Regeneração em andamento na posição {lista}; aguarde a conclusão antes de aprovar."
+
+
+# Atributos do ML que existem EM DUPLICATA no sistema: o atributo alimenta a
+# ficha tecnica (posicao 4) e a coluna homonima do listing
+# (`sku_model`/`sku_brand`, vinda do catalogo) alimenta a apresentacao
+# (posicao 1). Corrigir um NAO corrige o outro, e nada no codigo os
+# sincroniza. Enquanto a duplicacao existir, a tela precisa avisar.
+DUPLICATED_CATALOG_ATTRIBUTE_IDS = frozenset({"BRAND", "MODEL"})
 
 
 class ListingService:
@@ -340,6 +355,152 @@ class ListingService:
                 listing.status = "generating_images"
                 from app.workers.tasks.image_tasks import generate_images
                 generate_images.delay(str(listing.id))
+
+    @staticmethod
+    def _valor_limpo(item: dict) -> dict:
+        """Campo apagado pelo operador vira APAGAR, nao string vazia.
+
+        Sem isso, `_validar_valor` trataria `""` como um valor a procurar na
+        enumeracao e devolveria um 422 incompreensivel ("Valor '' nao e'
+        valido") quando a intencao era limpar o campo.
+        """
+        nome = item.get("value_name")
+        if nome is None or not str(nome).strip():
+            return {"attribute_id": item["attribute_id"], "value_id": None, "value_name": None}
+        return item
+
+    async def edit_attributes(
+        self,
+        listing: Listing,
+        submitted: list[dict],
+        *,
+        user_id: UUID,
+    ) -> tuple[list[int], list[str]]:
+        """Corrige atributo JA gravado e para por ai.
+
+        Nao toca `listing.status`, nao enfileira task, nao apaga imagem
+        aprovada nem descricao. `submit_attributes` continua sendo o passo de
+        PREENCHIMENTO — ele tolera obrigatorio vazio (e' assim que o anuncio
+        entra em `pending_seller_attributes`) e decide a etapa seguinte. Este
+        e' o de CORRECAO, e recusa obrigatorio vazio. Sao duas semanticas
+        opostas no mesmo dado; por isso dois metodos, e nao um `if` por
+        status dentro de um so.
+
+        Tudo que recusa, recusa ANTES de qualquer escrita — mesmo principio
+        de `approve_images`.
+
+        Devolve `(stale_positions, duplicated_fields)`: as posicoes de imagem
+        cujo texto impresso nao corresponde mais ao banco, e os atributos
+        editados que existem em duplicata no catalogo. Avisa; nao regenera
+        nada (opcao A do spec) — regenerar por conta propria gastaria chamada
+        paga sem decisao humana.
+
+        Spec: docs/superpowers/specs/2026-09-15-editar-atributos-antes-de-publicar.md
+        """
+        if listing.status not in EDITABLE_ATTRIBUTE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Correção de atributos indisponível no status '{listing.status}'",
+            )
+        # Mesma trava das aprovacoes e das promocoes: o worker da regeneracao
+        # vai reler os atributos para montar a posicao, entao editar agora
+        # decide por sorteio qual versao do texto entra na imagem.
+        await self.recusar_se_regeneracao_em_andamento(listing)
+
+        atributos = (await self.db.execute(
+            select(ListingAttribute).where(ListingAttribute.listing_id == listing.id)
+        )).scalars().all()
+        por_id = {a.attribute_id: a for a in atributos}
+
+        antes = snapshot_attributes(atributos)
+
+        # 1) Resolve TUDO antes de escrever: um 422 no terceiro item nao pode
+        #    deixar os dois primeiros gravados.
+        resolvidos = []
+        for item in submitted:
+            attr = por_id.get(item.get("attribute_id"))
+            if attr is None:
+                continue  # atributo de outra categoria: ignorado, como no PUT
+            value_id, value_name = self._validar_valor(attr, self._valor_limpo(item))
+            resolvidos.append((attr, value_id, value_name))
+
+        # 2) So o que MUDA de fato. A comparacao e' pelo `value_name` e nao
+        #    tambem pelo `value_id` de proposito: em atributo de texto livre
+        #    (`string`) o formulario reenvia o nome sem o id, e o id que o ML
+        #    resolveu esta gravado. Comparar os dois marcaria isso como
+        #    mudanca e APAGARIA um `value_id` valido.
+        mudancas = [
+            (attr, value_id, value_name)
+            for attr, value_id, value_name in resolvidos
+            if attr.value_name != value_name
+        ]
+
+        # 3) Obrigatorio nao pode ficar vazio depois da edicao.
+        esvaziados = sorted(
+            attr.attribute_name
+            for attr, _vid, value_name in mudancas
+            if attr.is_required and value_name is None
+        )
+        if esvaziados:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Atributo obrigatório não pode ficar vazio: "
+                    + ", ".join(esvaziados)
+                ),
+            )
+
+        # 4) Acao que nao faz nada nao e' acao (ver o docstring de
+        #    `ListingReviewEvent.approved_count`).
+        if not mudancas:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Nenhum atributo foi alterado",
+            )
+
+        # 5) Escreve. O antes/depois vive so no log: ainda nao sabemos que
+        #    perguntas faremos a esse historico, e tabela agora seria apostar
+        #    no formato antes de conhecer o uso.
+        for attr, value_id, value_name in mudancas:
+            anterior = attr.value_name
+            attr.value_id = value_id
+            attr.value_name = value_name
+            attr.source = "seller"
+            logger.info(
+                "attribute_edit listing_id=%s sku=%s user_id=%s attribute_id=%s de=%r para=%r",
+                listing.id, listing.sku_external_id, user_id,
+                attr.attribute_id, anterior, value_name,
+            )
+
+        posicoes_existentes = (await self.db.execute(
+            select(ListingImage.sort_order).where(
+                ListingImage.listing_id == listing.id,
+                ListingImage.sort_order.in_(tuple(POSITION_KINDS)),
+            )
+        )).scalars().all()
+        stale = stale_positions(antes, snapshot_attributes(atributos), posicoes_existentes)
+
+        self.db.add(ListingReviewEvent(
+            listing_id=listing.id,
+            user_id=user_id,
+            action=REVIEW_ACTION_ATTRIBUTES_EDITED,
+            mode=REVIEW_MODE_INDIVIDUAL,
+            approved_count=len(mudancas),
+            # Nao ha cronometro nesta tela, e estimar seria inventar dado.
+            review_seconds=None,
+        ))
+
+        duplicados = sorted({
+            attr.attribute_id
+            for attr, _vid, _vn in mudancas
+            if attr.attribute_id in DUPLICATED_CATALOG_ATTRIBUTE_IDS
+        })
+        logger.info(
+            "attribute_edit listing_id=%s sku=%s user_id=%s alterados=%d stale_positions=%s",
+            listing.id, listing.sku_external_id, user_id, len(mudancas), stale,
+        )
+        await self.db.commit()
+        return stale, duplicados
 
     async def trigger_image_generation(self, listing: Listing) -> None:
         if listing.status != "pending_description":
