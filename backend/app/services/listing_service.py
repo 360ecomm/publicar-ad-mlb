@@ -571,18 +571,36 @@ class ListingService:
         Insere um placeholder `ListingImage(status="generating")` e faz
         commit ANTES de enfileirar: o placeholder e' a trava contra duplo
         clique (indice unico parcial `uq_listing_images_generating_slot`) e o
-        que a tela le como "gerando". So posicao NAO aprovada — imagem
-        aprovada nao e' substituida por tras do operador. So em
-        `pending_image_approval`; o anuncio nao muda de status (ver o
-        cabecalho da task em image_tasks.py). Spec:
+        que a tela le como "gerando". Spec:
         docs/superpowers/specs/2026-09-12-regenerar-posicao.md.
+
+        Aceita `pending_image_approval` e `ready_to_publish`
+        (`REGENERABLE_POSITION_STATUSES`) e trata os dois de forma diferente:
+
+          pending_image_approval  o anuncio NAO muda de status, e posicao
+                                  aprovada e' recusada com 409 — imagem
+                                  aprovada nao e' substituida por tras do
+                                  operador.
+          ready_to_publish        as 5 posicoes estao aprovadas ali, entao
+                                  recusar posicao aprovada devolveria 409 em
+                                  100% dos casos. Regenerar DESAPROVA a
+                                  posicao pedida e devolve o anuncio a
+                                  `pending_image_approval`. Nao e'
+                                  substituicao por tras de ninguem: e' o
+                                  clique do proprio operador, e a invariante
+                                  "publica so imagem aprovada" fica intacta.
+                                  O retorno a revisao tambem e' o que faz o
+                                  guard de status do worker
+                                  (`_regenerate_position_async`) aceitar a
+                                  task.
         """
-        if listing.status != "pending_image_approval":
+        if listing.status not in REGENERABLE_POSITION_STATUSES:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "Regeneração de imagem disponível apenas no status "
-                    f"'pending_image_approval' (atual: '{listing.status}')"
+                    "Regeneração de imagem disponível apenas nos status "
+                    "'pending_image_approval' e 'ready_to_publish' "
+                    f"(atual: '{listing.status}')"
                 ),
             )
         if posicao not in POSITION_KINDS:
@@ -598,7 +616,24 @@ class ListingService:
                 )
             )
         ).scalars().all()
-        if any(img.approved for img in ocupantes):
+        if listing.status == "ready_to_publish":
+            # Desaprova SO esta posicao e devolve o anuncio a revisao, na
+            # mesma transacao do placeholder. `status="uploaded"` (e nao
+            # "rejected") porque a linha antiga volta a ser exatamente o que
+            # era: gerada e ainda nao julgada — se a regeneracao falhar, ela
+            # continua sendo a candidata daquela posicao.
+            #
+            # A volta acontece MESMO quando a posicao ja nao estava aprovada:
+            # um anuncio pode chegar a `ready_to_publish` com 4 de 5, e sem
+            # a mudanca de status o worker pularia a task pelo proprio guard
+            # (`image_tasks._regenerate_position_async`), deixando o
+            # placeholder preso para sempre.
+            for img in ocupantes:
+                if img.approved:
+                    img.approved = False
+                    img.status = "uploaded"
+            listing.status = "pending_image_approval"
+        elif any(img.approved for img in ocupantes):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"A posição {posicao} já está aprovada; imagem aprovada não é regenerada",

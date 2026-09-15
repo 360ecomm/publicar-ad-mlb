@@ -328,8 +328,11 @@ async def regenerate_image_position(
     Devolve 202 com o placeholder (`status="generating"`); a imagem chega
     pela task e aparece em `GET /listings/{id}` com `status="uploaded"`,
     `validation_failed` (QA) ou `generation_failed` (motor). 409 fora de
-    `pending_image_approval`, em posição aprovada ou com regeneração já em
-    andamento; 422 fora de 0..4. Ver `ListingService.regenerate_position`.
+    `pending_image_approval`/`ready_to_publish`, em posição já
+    aprovada quando o anúncio está em `pending_image_approval`, ou com
+    regeneração já em andamento. A partir de `ready_to_publish` a posição é
+    desaprovada e o anúncio volta para `pending_image_approval`.
+    422 fora de 0..4. Ver `ListingService.regenerate_position`.
     """
     svc = ListingService(db)
     listing = await svc.get_or_404(listing_id, active_seller.id)

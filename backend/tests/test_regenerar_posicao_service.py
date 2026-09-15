@@ -30,16 +30,16 @@ def _linha(approved):
 
 class TestRegenerarPosicaoService:
     @pytest.mark.asyncio
-    async def test_recusa_fora_de_pending_image_approval_antes_de_consultar(self):
+    async def test_recusa_status_nao_regeneravel_antes_de_consultar(self):
         from app.services.listing_service import ListingService
 
         db = _db_com_linhas([])
         svc = ListingService(db)
         with patch("app.workers.tasks.image_tasks.regenerate_position") as task:
             with pytest.raises(HTTPException) as exc:
-                await svc.regenerate_position(_listing("ready_to_publish"), 2)
+                await svc.regenerate_position(_listing("pending_description"), 2)
         assert exc.value.status_code == 409
-        assert "pending_image_approval" in exc.value.detail and "ready_to_publish" in exc.value.detail
+        assert "pending_image_approval" in exc.value.detail and "pending_description" in exc.value.detail
         db.execute.assert_not_awaited(); task.delay.assert_not_called()
 
     @pytest.mark.asyncio
