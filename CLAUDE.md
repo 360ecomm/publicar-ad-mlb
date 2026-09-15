@@ -910,6 +910,43 @@ Não é erro; só não comparar enviado × publicado nesse campo.
 
 ---
 
+## Título: os 60 caracteres são nossos, não do ML
+
+O limite real é **por categoria**, em `settings.max_title_length` da API de
+categorias. Medido em 2026-09-15:
+
+| Categoria | `max_title_length` |
+|---|---|
+| **MLB6284 — Perfumes** | **150** |
+| MLB1055 · MLB264201 · MLB178938 · MLB269718 · MLB1246 | 60 |
+
+**MLB6284 é o ponto fora da curva, e é a categoria da maior parte destes
+produtos.** Os 60 do prompt são **alvo de SEO nosso** (o ML trunca a exibição
+na busca por volta dali), não limite técnico.
+
+**Pendência registrada (2026-09-15): há 90 caracteres de folga não usados em
+perfumaria.** Não dá para simplesmente usar `max_title_length`: o título é
+gerado **antes** da categoria ser prevista, e a categoria é prevista **a partir
+do título** (`category_service._discover`). Usar o limite real exigiria gerar →
+prever → gerar de novo, outra chamada paga por anúncio. Decisão do Daniel: 60
+fica como alvo; reavaliar quando houver volume para comparar venda.
+
+> **Nunca fatiar título com `[:60]`.** Era o que os dois provedores faziam, e
+> um estouro de UM caractere virava título com a última palavra mutilada, sem
+> log e sem erro. Vítima: **`MLB7638983316`** (SKU 31, MLB6284) foi ao ar com
+> `"...Wepink 200m"` — o `l` de `200ml` comido pela fatia; o modelo tinha
+> escrito os 61 caracteres certos. Hoje a política vive em
+> `services/ai/title_guard.py`: estourou → pede de novo ao modelo **uma** vez
+> dizendo por quantos caracteres passou; estourou de novo → corta na **última
+> palavra inteira** com `logger.warning`. O corte só remove — o resultado é
+> sempre um prefixo da origem, nada é inventado.
+>
+> **Pendência:** `MLB7638983316` continua publicado (pausado) com o título
+> cortado. Corrigir título de anúncio já no ar não tem caminho hoje — vai junto
+> com "editar anúncio publicado".
+
+---
+
 ## Requisitos para smartphones (categoria MLB1055)
 
 Atributos obrigatórios que o ML valida contra bases externas:

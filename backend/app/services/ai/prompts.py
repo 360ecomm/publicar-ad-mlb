@@ -94,6 +94,10 @@ Gere EXATAMENTE 1 título otimizado para o produto abaixo.
 REGRAS OBRIGATÓRIAS:
 - Idioma: PORTUGUÊS DO BRASIL (nunca inglês, nunca espanhol)
 - Máximo 60 caracteres (incluindo espaços)
+- NUNCA termine o título com palavra ou unidade PARTIDA ao meio — "200m" no \
+lugar de "200ml", "Colôni" no lugar de "Colônia". Se não couber em 60, REMOVA \
+uma informação INTEIRA (uma palavra, um termo) em vez de encurtar no meio. \
+Título mais curto e correto é melhor que título no limite com palavra cortada.
 - Estrutura preferencial: {structure}
 - Exemplo de aplicação da estrutura: {resolved_example}
 - Coloque os termos mais específicos e buscados nos primeiros 30 caracteres
@@ -121,6 +125,10 @@ Crie 3 variações de título para um anúncio do produto abaixo.
 
 REGRAS OBRIGATÓRIAS:
 - Máximo 60 caracteres por título (incluindo espaços)
+- NUNCA termine um título com palavra ou unidade PARTIDA ao meio — "200m" no \
+lugar de "200ml", "Colôni" no lugar de "Colônia". Se não couber em 60, REMOVA \
+uma informação INTEIRA (uma palavra, um termo) em vez de encurtar no meio. \
+Título mais curto e correto é melhor que título no limite com palavra cortada.
 - Estrutura preferencial: {structure}
 - Exemplo de aplicação da estrutura: {resolved_example}
 - Coloque os termos mais específicos e buscados nos primeiros 30 caracteres
@@ -137,6 +145,38 @@ Condição: {condition_pt}
 
 Responda EXCLUSIVAMENTE em JSON válido, sem markdown, sem ```json:
 {{"titles": [{{"title": "título aqui", "score": 9.2, "rationale": "motivo breve"}}, {{"title": "título aqui", "score": 8.7, "rationale": "motivo breve"}}, {{"title": "título aqui", "score": 8.1, "rationale": "motivo breve"}}]}}"""
+
+
+def build_title_retry_prompt(
+    prompt_original: str,
+    titulos_recusados: list[str],
+    limite: int,
+) -> str:
+    """Segunda (e unica) tentativa, quando o titulo passou do limite.
+
+    Manda o prompt original inteiro de novo, com um bloco dizendo POR QUANTOS
+    caracteres cada titulo passou. O numero exato importa: o caso real que
+    originou isto passou por UM caractere, e saber disso e' a diferenca entre
+    remover uma palavra e reescrever tudo.
+
+    Alternativa a isto seria cortar direto — e cortar perde informacao que o
+    modelo conseguiria preservar reorganizando. Ver `title_guard`.
+    """
+    recusados = "\n".join(
+        f'- "{t}" tem {len(t)} caracteres, passou {len(t) - limite}'
+        for t in titulos_recusados
+        if isinstance(t, str) and t
+    )
+    return f"""{prompt_original}
+
+ATENÇÃO — sua resposta anterior foi RECUSADA por passar do limite:
+{recusados}
+
+Reescreva respeitando {limite} caracteres. Para caber, REMOVA uma informação
+INTEIRA (uma palavra, um termo) — nunca encurte uma palavra pela metade, e
+nunca corte uma unidade ("200ml" não pode virar "200m"). Prefira um título
+mais curto e correto a um título no limite com palavra cortada. Não invente
+nenhuma informação que não esteja na descrição do produto acima."""
 
 
 # ── Description prompt ─────────────────────────────────────────────────────────

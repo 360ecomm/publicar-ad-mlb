@@ -6,9 +6,11 @@ from app.services.ai.base import AIProvider
 from app.services.ai.cost_log import log_ai_cost
 from app.services.ai.prompts import (
     build_title_prompt,
+    build_title_retry_prompt,
     build_description_prompt,
     build_card_copy_prompt,
 )
+from app.services.ai.title_guard import TITLE_TARGET_CHARS, aplicar_limite
 
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -79,17 +81,42 @@ class GeminiProvider(AIProvider):
         parsed = json.loads(_extract_json(text))
         if not isinstance(parsed, dict):
             raise RuntimeError(f"Gemini não retornou um JSON de título válido: {text[:300]!r}")
-        if batch_mode:
-            title = parsed.get("title", "").strip()[:60]
-            if not title:
+
+        def _titulos_de(bruto: dict) -> list | None:
+            if batch_mode:
+                titulo = bruto.get("title", "")
+                titulo = titulo.strip() if isinstance(titulo, str) else ""
+                if not titulo:
+                    return None
+                return [{"title": titulo, "score": None, "rationale": "batch_auto"}]
+            lista = bruto.get("titles")
+            return lista if isinstance(lista, list) else None
+
+        titulos = _titulos_de(parsed)
+        if titulos is None:
+            if batch_mode:
                 # Vazio seguia ate `domain_discovery?q=` devolver 400, tres
                 # tasks depois. Falha aqui, com o texto cru para diagnostico.
                 raise RuntimeError(f"Gemini retornou título vazio em batch_mode: {text[:300]!r}")
-            return [{"title": title, "score": None, "rationale": "batch_auto"}]
-        titles = parsed.get("titles")
-        if not isinstance(titles, list):
             raise RuntimeError(f"Gemini não retornou a lista 'titles': {text[:300]!r}")
-        return titles
+
+        async def _retentar() -> list | None:
+            recusados = [
+                t.get("title", "") for t in titulos
+                if isinstance(t, dict) and isinstance(t.get("title"), str)
+            ]
+            resposta = await self._call(
+                build_title_retry_prompt(prompt, recusados, TITLE_TARGET_CHARS),
+                max_tokens=2000, temperature=0.6,
+                thinking=not batch_mode, task="title",
+            )
+            novo = json.loads(_extract_json(resposta))
+            return _titulos_de(novo) if isinstance(novo, dict) else None
+
+        # O `[:60]` que vivia aqui era uma fatia cega: estouro de UM caractere
+        # virava titulo com a ultima palavra mutilada, publicado sem aviso
+        # (MLB7638983316, "...Wepink 200m"). Ver `title_guard`.
+        return await aplicar_limite(titulos, retentar=_retentar)
 
     async def generate_description(self, listing_data: dict) -> str:
         prompt = build_description_prompt(listing_data)

@@ -4,9 +4,11 @@ from app.config import get_settings
 from app.services.ai.base import AIProvider
 from app.services.ai.prompts import (
     build_title_prompt,
+    build_title_retry_prompt,
     build_description_prompt,
     build_card_copy_prompt,
 )
+from app.services.ai.title_guard import TITLE_TARGET_CHARS, aplicar_limite
 
 _BASE = "https://api.anthropic.com/v1/messages"
 
@@ -43,10 +45,44 @@ class ClaudeProvider(AIProvider):
         if batch_mode:
             from app.services.ai.gemini import _extract_json
             parsed = json.loads(_extract_json(text))
-            title = parsed.get("title", "").strip()[:60]
-            return [{"title": title, "score": None, "rationale": "batch_auto"}]
-        text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        return json.loads(text)["titles"]
+            titulo = parsed.get("title", "")
+            titulos = [{
+                "title": titulo.strip() if isinstance(titulo, str) else "",
+                "score": None,
+                "rationale": "batch_auto",
+            }]
+        else:
+            limpo = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            titulos = json.loads(limpo)["titles"]
+
+        async def _retentar() -> list | None:
+            from app.services.ai.gemini import _extract_json
+
+            recusados = [
+                t.get("title", "") for t in titulos
+                if isinstance(t, dict) and isinstance(t.get("title"), str)
+            ]
+            resposta = await self._call(
+                build_title_retry_prompt(prompt, recusados, TITLE_TARGET_CHARS),
+                max_tokens=200 if batch_mode else 500, temperature=0.6,
+            )
+            if batch_mode:
+                novo = json.loads(_extract_json(resposta))
+                titulo_novo = novo.get("title", "")
+                titulo_novo = titulo_novo.strip() if isinstance(titulo_novo, str) else ""
+                if not titulo_novo:
+                    return None
+                return [{"title": titulo_novo, "score": None, "rationale": "batch_auto"}]
+            limpo_novo = (
+                resposta.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            )
+            lista = json.loads(limpo_novo).get("titles")
+            return lista if isinstance(lista, list) else None
+
+        # Este provedor esta fora de uso, mas o `[:60]` cego que vivia aqui era
+        # a MESMA armadilha do Gemini (ver `title_guard`): deixar so num dos
+        # dois seria plantar o bug para quando alguem trocar o provider.
+        return await aplicar_limite(titulos, retentar=_retentar)
 
     async def generate_description(self, listing_data: dict) -> str:
         prompt = build_description_prompt(listing_data)
