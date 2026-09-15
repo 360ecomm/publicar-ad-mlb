@@ -745,6 +745,72 @@ class ListingService:
                 detail=_mensagem_regeneracao_em_andamento(posicoes),
             )
 
+    async def regenerate_description(self, listing: Listing) -> None:
+        """Refaz a descricao de um anuncio ja pronto, sem tocar nas imagens.
+
+        Existe por causa de uma corrupcao de auditoria. `generate_description`
+        so era disparada por `approve_images`/`bulk_approve_images`, entao a
+        UNICA forma de refazer a descricao depois de corrigir um atributo era
+        reaprovar as imagens — e cada reaprovacao grava um
+        `listing_review_events` afirmando revisao humana de imagens que
+        ninguem olhou. O dado criado para PROVAR revisao virava prova falsa.
+
+        Este caminho NAO grava evento: nao houve revisao de imagem nenhuma.
+
+        O status muda para `generating_description` e volta sozinho para
+        `ready_to_publish` no fim da task. Mudar e' o correto aqui: o anuncio
+        ESTA gerando descricao, e esconder isso deixaria a tela mentindo. A
+        regra "editar nao avanca etapa" vale para a edicao de atributos, nao
+        para esta acao explicita do operador.
+        """
+        if listing.status != "ready_to_publish":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Regeneração da descrição indisponível no status '{listing.status}'",
+            )
+        # UPDATE atomico + dispatch, o padrao dos gatilhos do projeto: duas
+        # requisicoes simultaneas nao podem enfileirar duas geracoes.
+        result = await self.db.execute(
+            sa_update(Listing)
+            .where(Listing.id == listing.id, Listing.status == "ready_to_publish")
+            .values(status="generating_description")
+            .execution_options(synchronize_session=False)
+        )
+        await self.db.commit()
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Este anúncio acabou de mudar de estado; recarregue a página.",
+            )
+        listing.status = "generating_description"
+
+        from app.workers.tasks.ai_tasks import generate_description
+        try:
+            generate_description.delay(str(listing.id))
+        except Exception as exc:
+            # Broker fora: sem a task, o anuncio ficaria preso em
+            # `generating_description` para sempre — status que nenhum beat
+            # varre e de onde nenhuma acao humana sai.
+            await self.db.execute(
+                sa_update(Listing)
+                .where(Listing.id == listing.id, Listing.status == "generating_description")
+                .values(status="ready_to_publish")
+                .execution_options(synchronize_session=False)
+            )
+            await self.db.commit()
+            listing.status = "ready_to_publish"
+            logger.error(
+                "regen_descricao listing_id=%s result=fila_indisponivel reason=%s",
+                listing.id, exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Fila de processamento indisponível no momento; o pedido não foi "
+                    "registrado. Tente de novo em instantes."
+                ),
+            )
+
     async def approve_images(
         self,
         listing: Listing,

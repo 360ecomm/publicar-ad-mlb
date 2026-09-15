@@ -43,8 +43,9 @@ _precisa_db = pytest.mark.skipif(
 
 ENDPOINTS = Path(__file__).resolve().parents[1] / "app" / "api" / "v1" / "endpoints" / "listings.py"
 
-# Os 11 endpoints de acao que commitam e devolvem ListingSummary (passo 0 da
-# tarefa de 2026-09-12). `create_listing` fica de fora da lista porque o
+# Os 12 endpoints de acao que commitam e devolvem ListingSummary (passo 0 da
+# tarefa de 2026-09-12; `regenerate_description` somado na tarefa 6 de
+# 2026-09-15). `create_listing` fica de fora da lista porque o
 # service faz `refresh` e devolve o ORM — a resposta ja sai recarregada.
 ENDPOINTS_DE_ACAO = {
     "start_pipeline",
@@ -58,6 +59,7 @@ ENDPOINTS_DE_ACAO = {
     "publish_listing",
     "promote_cover",
     "promote_specs",
+    "regenerate_description",
 }
 
 

@@ -340,6 +340,25 @@ async def regenerate_image_position(
     return ImageOut.model_validate(placeholder)
 
 
+@router.post("/{listing_id}/pipeline/regenerate_description", response_model=ListingSummary)
+async def regenerate_description(
+    listing_id: UUID,
+    active_seller=Depends(get_active_seller),
+    db: AsyncSession = Depends(get_db),
+):
+    """Refaz a descrição de um anúncio em `ready_to_publish`.
+
+    Usado depois de corrigir um atributo: a descrição é gerada uma única vez
+    e fica desatualizada. Antes deste endpoint a única saída era reaprovar as
+    imagens, o que gravava um evento de revisão humana que não aconteceu.
+    409 fora de `ready_to_publish`; 503 com a fila fora.
+    """
+    svc = ListingService(db)
+    listing = await svc.get_or_404(listing_id, active_seller.id)
+    await svc.regenerate_description(listing)
+    return await svc.summary_after_commit(listing)
+
+
 @router.post("/{listing_id}/pipeline/publish", response_model=ListingSummary)
 async def publish_listing(
     listing_id: UUID,
