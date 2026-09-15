@@ -1,7 +1,15 @@
 "use client"
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { getListing, retryPipeline, deleteListing, generateImages, resumeRawPhotos, resumeAiEngine } from "@/lib/api/listings"
+import {
+  getListing,
+  retryPipeline,
+  deleteListing,
+  generateImages,
+  resumeRawPhotos,
+  resumeAiEngine,
+  regenerateDescription,
+} from "@/lib/api/listings"
 import { ApiError } from "@/lib/api/client"
 import { describeResumeError, standbyGuidance } from "@/lib/standby-guidance"
 import { formatPrice, formatQuantity } from "@/lib/utils"
@@ -22,6 +30,7 @@ import {
 import Link from "next/link"
 import type { ListingStatus } from "@/types/listing"
 import { PROCESSING_STATUSES, STATUS_LABELS } from "@/types/listing"
+import { isEditableStatus } from "@/lib/attribute-edit"
 
 const PROCESSING_MESSAGES: Partial<Record<ListingStatus, string>> = {
   generating_title: "A IA está gerando opções de título para o seu produto...",
@@ -109,6 +118,18 @@ export default function ListingDetailPage() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "Erro ao iniciar geração de imagens")
+    },
+  })
+
+  const regenerateDescriptionMutation = useMutation({
+    mutationFn: () => regenerateDescription(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["listing", id] })
+      queryClient.invalidateQueries({ queryKey: ["listings"] })
+      toast.success("Descrição sendo refeita.")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Erro ao regerar descrição")
     },
   })
 
@@ -256,6 +277,22 @@ export default function ListingDetailPage() {
         </Card>
       )}
 
+      {isEditableStatus(status) && status !== "pending_seller_attributes" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Atributos do produto</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-slate-600 mb-4">
+              Corrija um valor já gravado. A correção não avança a etapa do anúncio.
+            </p>
+            <Button asChild variant="outline" className="w-full">
+              <Link href={`/listings/${id}/attributes`}>Corrigir atributos</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {status === "pending_description" && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
@@ -340,6 +377,24 @@ export default function ListingDetailPage() {
             <Button asChild className="w-full">
               <Link href={`/listings/${id}/preview`}>Revisar e publicar</Link>
             </Button>
+            <Button
+              variant="outline"
+              className="w-full mt-2"
+              disabled={regenerateDescriptionMutation.isPending}
+              onClick={() => regenerateDescriptionMutation.mutate()}
+            >
+              {regenerateDescriptionMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Regerando...
+                </>
+              ) : (
+                "Regerar descrição"
+              )}
+            </Button>
+            <p className="text-xs text-blue-700/70 mt-2">
+              Use depois de corrigir um atributo: a descrição foi escrita uma vez só.
+            </p>
           </CardContent>
         </Card>
       )}

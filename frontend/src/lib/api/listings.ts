@@ -9,6 +9,7 @@ import type {
   StatusCounts,
   RawPhotosOut,
   ImageOut,
+  AttributesEditResponse,
 } from "@/types/listing"
 
 export interface CreateListingPayload {
@@ -130,6 +131,32 @@ export async function submitAttributes(
     method: "PUT",
     body: JSON.stringify({ attributes }),
   })
+}
+
+/**
+ * Corrige atributo já gravado (fora do modo de preenchimento inicial). O
+ * corpo é o mesmo do PUT; a diferença é o backend não exigir mais
+ * `pending_seller_attributes` e permitir apagar valor (`buildEditPayload`
+ * manda o vazio de propósito). 409 fora dos status editáveis ou com
+ * regeneração de imagem em andamento; 422 para valor fora da enumeração,
+ * obrigatório esvaziado ou edição que não muda nada.
+ */
+export async function editAttributes(
+  listingId: string,
+  attributes: AttributeInput[]
+): Promise<AttributesEditResponse> {
+  return apiFetch<AttributesEditResponse>(`/api/v1/listings/${listingId}/attributes`, {
+    method: "PATCH",
+    body: JSON.stringify({ attributes }),
+  })
+}
+
+/** Refaz a descrição do anúncio (só em `ready_to_publish`). */
+export async function regenerateDescription(id: string): Promise<ListingSummary> {
+  return apiFetch<ListingSummary>(
+    `/api/v1/listings/${id}/pipeline/regenerate_description`,
+    { method: "POST" }
+  )
 }
 
 export async function generateImages(id: string): Promise<ListingSummary> {

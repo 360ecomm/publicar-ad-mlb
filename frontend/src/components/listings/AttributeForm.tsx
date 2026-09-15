@@ -3,15 +3,16 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { submitAttributes } from "@/lib/api/listings"
+import { submitAttributes, editAttributes } from "@/lib/api/listings"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
 import { ChevronDown, Info, Loader2 } from "lucide-react"
-import type { AttributeOut } from "@/types/listing"
+import type { AttributeOut, AttributesEditResponse, ListingSummary } from "@/types/listing"
 import { classifyAttributes, fixedValue } from "@/lib/attribute-visibility"
 import { fieldKindFor, matchSuggestion } from "@/lib/attribute-field"
+import { buildEditPayload } from "@/lib/attribute-edit"
 
 interface AttributeValue {
   value_id?: string
@@ -21,9 +22,13 @@ interface AttributeValue {
 interface Props {
   listingId: string
   attributes: AttributeOut[]
+  /** `edit` corrige atributo já gravado; `submit` (padrão) é o preenchimento inicial. */
+  mode?: "submit" | "edit"
+  /** Chamado no sucesso de `edit` com a resposta do PATCH (stale_positions/duplicated_fields). */
+  onEdited?: (result: AttributesEditResponse) => void
 }
 
-export function AttributeForm({ listingId, attributes }: Props) {
+export function AttributeForm({ listingId, attributes, mode = "submit", onEdited }: Props) {
   const router = useRouter()
   const queryClient = useQueryClient()
 
@@ -49,8 +54,13 @@ export function AttributeForm({ listingId, attributes }: Props) {
   const [values, setValues] = useState<Record<string, AttributeValue>>(initialValues)
   const [optionalOpen, setOptionalOpen] = useState(false)
 
-  const mutation = useMutation({
+  const mutation = useMutation<ListingSummary | AttributesEditResponse, Error, void>({
     mutationFn: () => {
+      if (mode === "edit") {
+        // Em correção o payload leva o que foi ESVAZIADO. O filtro de valor
+        // vazio do modo de preenchimento tornaria impossível limpar um campo.
+        return editAttributes(listingId, buildEditPayload(attributes, values))
+      }
       const payload = attributes
         .filter((attr) => values[attr.attribute_id]?.value_name?.trim())
         .map((attr) => ({
@@ -60,9 +70,14 @@ export function AttributeForm({ listingId, attributes }: Props) {
         }))
       return submitAttributes(listingId, payload)
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["listing", listingId] })
       queryClient.invalidateQueries({ queryKey: ["listings"] })
+      if (mode === "edit") {
+        toast.success("Correção salva. A etapa do anúncio não mudou.")
+        onEdited?.(result as AttributesEditResponse)
+        return
+      }
       toast.success("Atributos salvos com sucesso!")
       router.push(`/listings/${listingId}`)
     },
@@ -187,10 +202,17 @@ export function AttributeForm({ listingId, attributes }: Props) {
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             Salvando...
           </>
+        ) : mode === "edit" ? (
+          "Salvar correção"
         ) : (
           "Salvar e continuar"
         )}
       </Button>
+      {mode === "edit" && (
+        <p className="text-xs text-slate-500 mt-2 text-center">
+          Salvar não avança a etapa do anúncio.
+        </p>
+      )}
     </form>
   )
 }

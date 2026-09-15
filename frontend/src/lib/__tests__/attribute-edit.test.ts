@@ -1,0 +1,53 @@
+import { strict as assert } from "node:assert"
+import { test } from "node:test"
+import { buildEditPayload, isEditableStatus } from "../attribute-edit"
+import type { AttributeOut } from "@/types/listing"
+
+const attr = (id: string, value_name: string | null): AttributeOut =>
+  ({
+    attribute_id: id,
+    attribute_name: id,
+    value_id: null,
+    value_name,
+    attribute_type: "string",
+    is_required: false,
+    allowed_values: null,
+    tags: null,
+    is_editable: true,
+  }) as AttributeOut
+
+test("payload de edição inclui campo esvaziado", () => {
+  const atual = { FLAVOR: { value_name: "" } }
+  const payload = buildEditPayload([attr("FLAVOR", "Chocolate")], atual)
+  assert.deepEqual(payload, [{ attribute_id: "FLAVOR", value_id: undefined, value_name: "" }])
+})
+
+test("payload de edição omite o que não mudou", () => {
+  const atual = { FLAVOR: { value_name: "Chocolate" } }
+  assert.deepEqual(buildEditPayload([attr("FLAVOR", "Chocolate")], atual), [])
+})
+
+test("payload de edição inclui valor trocado", () => {
+  const atual = { FLAVOR: { value_name: "Lichia" } }
+  const payload = buildEditPayload([attr("FLAVOR", "Chocolate")], atual)
+  assert.equal(payload.length, 1)
+  assert.equal(payload[0].value_name, "Lichia")
+})
+
+test("valor nulo no servidor conta como vazio", () => {
+  const atual = { FLAVOR: { value_name: "" } }
+  assert.deepEqual(buildEditPayload([attr("FLAVOR", null)], atual), [])
+})
+
+test("status editáveis batem com o backend", () => {
+  for (const s of [
+    "draft", "pending_title_approval", "pending_seller_attributes",
+    "pending_description", "pending_raw_photos", "pending_ai_engine",
+    "pending_image_approval", "ready_to_publish", "failed",
+  ]) assert.equal(isEditableStatus(s as never), true, s)
+
+  for (const s of [
+    "generating_title", "predicting_category", "generating_images",
+    "generating_description", "publishing", "published", "published_paused",
+  ]) assert.equal(isEditableStatus(s as never), false, s)
+})

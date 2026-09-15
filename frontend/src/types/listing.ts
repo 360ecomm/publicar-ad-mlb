@@ -235,3 +235,12 @@ export interface ListingAttributesRow {
   status: string
   attributes: AttributeItem[]
 }
+
+/** Espelho de `AttributesEditResponse` em `backend/app/schemas/listing.py`. */
+export interface AttributesEditResponse {
+  listing: ListingSummary
+  /** Posições do esquema de 5 cujo texto impresso na imagem ficou velho. */
+  stale_positions: number[]
+  /** Atributos editados que existem em duplicata (`BRAND`, `MODEL`). */
+  duplicated_fields: string[]
+}
