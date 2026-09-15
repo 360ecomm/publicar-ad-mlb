@@ -13,7 +13,10 @@ precisa de um botão "gerar de novo" por posição.
 ## Restrições já decididas
 
 - **Só posição não aprovada.** Regenerar uma posição já aprovada é recusado
-  (409). Imagem aprovada não é substituída por trás do operador.
+  (409). Imagem aprovada não é substituída por trás do operador. Vale em
+  `pending_image_approval`; a partir de `ready_to_publish` (Task 5,
+  2026-09-15) a posição é desaprovada e o anúncio volta para revisão em vez
+  de recusar.
 - **Só em `pending_image_approval`.** Em qualquer outro status, 409 legível.
   **Atualização (2026-09-15, Task 5):** passou a aceitar também
   `ready_to_publish` — nesse status as 5 posições já estão aprovadas, então
@@ -46,8 +49,10 @@ precisa de um botão "gerar de novo" por posição.
    capa). Apagam-se as linhas **não aprovadas** que ocupavam a posição
    **antes** da regeneração começar (ids capturados no início; linhas criadas
    pela própria regeneração, como o fallback, nunca são apagadas). Nunca
-   apagar linha aprovada — a chamada já foi recusada antes. O `asset_key` de
-   cada linha apagada vai para o log.
+   apagar linha aprovada — em `pending_image_approval` a chamada já foi
+   recusada antes; vindo de `ready_to_publish` (Task 5, 2026-09-15) a linha
+   já foi desaprovada antes de chegar aqui, então também nunca está entre as
+   apagadas. O `asset_key` de cada linha apagada vai para o log.
    - Falha do motor (nenhuma imagem produzida): placeholder vira
      `status="generation_failed"` com o motivo em `validation_error`; a
      anterior permanece.

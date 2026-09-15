@@ -667,11 +667,13 @@ class ListingService:
         from app.workers.tasks.image_tasks import regenerate_position
         try:
             regenerate_position.delay(str(listing.id), str(placeholder.id))
-        except Exception as exc:  # broker fora (Redis): sem task, o placeholder
-            # seria um no-op silencioso (o worker o apaga sozinho, ver
-            # image_tasks.py:708) — bloqueia tambem as aprovacoes deste
-            # anuncio e o indice unico parcial recusa qualquer nova tentativa
-            # na posicao.
+        except Exception as exc:  # broker fora (Redis): a task NUNCA foi
+            # enfileirada, entao nenhum worker vai rodar para apaga-la (isso
+            # e' diferente do guard de status do worker em
+            # `image_tasks.py:708`, que so age quando a task CHEGA a rodar).
+            # Sem este delete, o placeholder seria uma trava eterna — bloqueia
+            # as aprovacoes e as promocoes do anuncio, e o indice unico
+            # parcial recusa qualquer nova tentativa nesta posicao.
             await self.db.delete(placeholder)
             if status_original == "ready_to_publish":
                 # Compensacao por verdade: a mensagem de 503 abaixo afirma
