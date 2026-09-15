@@ -30,6 +30,7 @@ LISTING_STATUSES: tuple[str, ...] = (
     "ready_to_publish",
     "publishing",
     "published",
+    "published_under_review",
     "published_paused",
     "failed",
 )
@@ -40,7 +41,7 @@ LISTING_STATUSES: tuple[str, ...] = (
 # `listing_image.py`: mais de um call site precisa concordar com o MESMO
 # conjunto.
 #
-# Os sete de fora nao sao esquecimento — em cinco deles um worker esta lendo
+# Os oito de fora nao sao esquecimento — em cinco deles um worker esta lendo
 # os atributos neste exato momento:
 #   generating_title       atributos ainda nao existem (nascem em
 #                          `predicting_category`)
@@ -56,7 +57,8 @@ LISTING_STATUSES: tuple[str, ...] = (
 #                          ML: a edicao iria ao ar sem revisao nenhuma, ou
 #                          derrubaria a publicacao com 422 no momento mais caro
 #   published /            editar anuncio NO AR e' pendencia futura, com
-#   published_paused       regras proprias (o ML tem API de update)
+#   published_under_review regras proprias (o ML tem API de update)
+#   published_paused
 EDITABLE_ATTRIBUTE_STATUSES: frozenset[str] = frozenset({
     "draft",
     "pending_title_approval",

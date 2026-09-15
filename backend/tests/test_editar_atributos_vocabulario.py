@@ -8,7 +8,7 @@ class TestStatusEditaveis:
 
         assert EDITABLE_ATTRIBUTE_STATUSES <= set(LISTING_STATUSES)
 
-    def test_os_sete_perigosos_ficam_de_fora(self):
+    def test_os_oito_perigosos_ficam_de_fora(self):
         """Nenhum destes pode entrar sem uma decisao nova: em cinco deles um
         worker esta lendo os atributos neste exato momento, e em
         `predicting_category` a edicao seria APAGADA em silencio pelo
@@ -22,6 +22,7 @@ class TestStatusEditaveis:
             "generating_description",
             "publishing",
             "published",
+            "published_under_review",
             "published_paused",
         }
         assert EDITABLE_ATTRIBUTE_STATUSES & proibidos == set()
@@ -49,7 +50,7 @@ class TestStatusEditaveis:
         proibidos = {
             "generating_title", "predicting_category", "generating_images",
             "generating_description", "publishing", "published",
-            "published_paused",
+            "published_under_review", "published_paused",
         }
         assert EDITABLE_ATTRIBUTE_STATUSES | proibidos == set(LISTING_STATUSES)
 

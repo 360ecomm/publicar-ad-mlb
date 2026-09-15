@@ -1,6 +1,6 @@
 """Testes com Postgres real (Task 1 do plano
 `2026-09-11-listagem-em-escala`): `ListingService.count_by_status` agrega em
-UMA consulta (GROUP BY status) e sempre devolve as 16 chaves de
+UMA consulta (GROUP BY status) e sempre devolve as 17 chaves de
 `LISTING_STATUSES`, com zero quando nao ha anuncio naquele status.
 
 So roda com `TEST_DATABASE_URL` apontando pro banco dedicado `publicar_test`
@@ -127,11 +127,11 @@ async def _semear(session_maker, especificacao):
 @_precisa_db
 class TestContagemPorStatus:
     @pytest.mark.asyncio
-    async def test_conta_por_status_do_seller_ativo_com_todas_as_16_chaves(self):
+    async def test_conta_por_status_do_seller_ativo_com_todas_as_17_chaves(self):
         """Seller A tem 3 failed, 2 ready_to_publish, 1 draft; seller B tem 4
         failed (isolamento multi-tenant: a contagem do A nao pode contar os
-        do B). `count_by_status(A)` devolve as 16 chaves de
-        `LISTING_STATUSES`, com os 3 status semeados corretos e os 13
+        do B). `count_by_status(A)` devolve as 17 chaves de
+        `LISTING_STATUSES`, com os 3 status semeados corretos e os 14
         restantes em zero (`pending_raw_photos` conferido explicitamente como
         exemplo de zero)."""
         from app.models.listing import LISTING_STATUSES
@@ -162,7 +162,7 @@ class TestContagemPorStatus:
             await engine.dispose()
 
     @pytest.mark.asyncio
-    async def test_seller_sem_nenhum_anuncio_devolve_16_chaves_zeradas(self):
+    async def test_seller_sem_nenhum_anuncio_devolve_17_chaves_zeradas(self):
         """Barra de resumo nao pode quebrar (nem sumir chave) pro seller que
         acabou de conectar a conta ML e ainda nao tem nenhum anuncio."""
         from app.models.listing import LISTING_STATUSES
@@ -186,7 +186,7 @@ class TestContagemPorStatus:
     async def test_status_legado_fora_da_lista_aparece_e_entra_no_total(self):
         """Um status que nao esta mais em `LISTING_STATUSES` (dado legado,
         por exemplo de uma fase anterior do pipeline) nao pode sumir da
-        contagem: aparece com a propria chave, alem das 16 canonicas, e conta
+        contagem: aparece com a propria chave, alem das 17 canonicas, e conta
         no total. Perder um anuncio da conta e' pior do que mostrar uma
         chave extra."""
         from app.models.listing import LISTING_STATUSES

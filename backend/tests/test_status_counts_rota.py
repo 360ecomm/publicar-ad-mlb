@@ -32,11 +32,11 @@ def test_status_counts_declarada_antes_do_detalhe():
     )
 
 
-def test_lista_canonica_tem_16_status_sem_repeticao():
+def test_lista_canonica_tem_17_status_sem_repeticao():
     """`LISTING_STATUSES` e' a lista que a barra de resumo da fila usa: cada
     status aparece SEMPRE na contagem, com zero quando nao ha anuncio, pra
     barra nao mudar de tamanho a cada atualizacao. Precisa ter exatamente os
-    16 status do pipeline, sem repeticao e sem faltar nenhum."""
+    17 status do pipeline, sem repeticao e sem faltar nenhum."""
     from app.models.listing import LISTING_STATUSES
 
     esperado = {
@@ -54,10 +54,11 @@ def test_lista_canonica_tem_16_status_sem_repeticao():
         "ready_to_publish",
         "publishing",
         "published",
+        "published_under_review",
         "published_paused",
         "failed",
     }
 
-    assert len(LISTING_STATUSES) == 16, LISTING_STATUSES
-    assert len(set(LISTING_STATUSES)) == 16, "nao pode ter status repetido"
+    assert len(LISTING_STATUSES) == 17, LISTING_STATUSES
+    assert len(set(LISTING_STATUSES)) == 17, "nao pode ter status repetido"
     assert set(LISTING_STATUSES) == esperado, set(LISTING_STATUSES) ^ esperado
