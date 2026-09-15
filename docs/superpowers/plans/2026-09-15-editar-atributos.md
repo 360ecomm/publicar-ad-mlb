@@ -302,16 +302,20 @@ def _attr(attribute_id, value_name, attribute_name=None):
     )
 
 
-# Tres atributos de vitrine: e' o minimo para `build_specs_card` devolver
-# ficha (MIN_BULLETS = 2) e ainda sobrar um fora dos 3 bullets.
+# A ficha ordena BRAND, MODEL e depois alfabetico por `attribute_id`, e corta
+# em MAX_BULLETS = 3. Com estes atributos os bullets sao BRAND, MODEL, FLAVOR;
+# UNIT_VOLUME e PACKAGE_TYPE ficam FORA — e e' isso que permite testar
+# "mudou a vitrine sem mexer na ficha" sem esbarrar no volume (que marcaria a
+# posicao 1 junto).
 def _base():
     return [
-        _attr("BRAND", "Wepink", "Marca"),
-        _attr("MODEL", "Fatal Black", "Modelo"),
-        _attr("UNIT_VOLUME", "200 ml", "Volume"),
-        _attr("FLAVOR", "Chocolate", "Sabor"),
-        _attr("SELLER_SKU", "91", "SKU"),
-        _attr("SELLER_PACKAGE_WEIGHT", "120 g", "Peso"),
+        _attr("BRAND", "Wepink", "Marca"),            # 0 — bullet 1
+        _attr("MODEL", "Fatal Black", "Modelo"),      # 1 — bullet 2
+        _attr("UNIT_VOLUME", "200 ml", "Volume"),     # 2 — fora dos bullets
+        _attr("FLAVOR", "Chocolate", "Sabor"),        # 3 — bullet 3
+        _attr("SELLER_SKU", "91", "SKU"),             # 4 — excluido da ficha
+        _attr("SELLER_PACKAGE_WEIGHT", "120 g", "Peso"),  # 5 — excluido
+        _attr("PACKAGE_TYPE", "Frasco", "Embalagem"), # 6 — fora dos bullets
     ]
 
 
@@ -337,7 +341,7 @@ class TestSnapshot:
 
         ids = {aid for aid, _ in snapshot_attributes(_base()).vitrine}
         assert "SELLER_SKU" not in ids and "SELLER_PACKAGE_WEIGHT" not in ids
-        assert ids == {"BRAND", "MODEL", "UNIT_VOLUME", "FLAVOR"}
+        assert ids == {"BRAND", "MODEL", "UNIT_VOLUME", "FLAVOR", "PACKAGE_TYPE"}
 
     def test_vitrine_ignora_atributo_sem_valor(self):
         from app.services.attribute_impact import snapshot_attributes
@@ -398,20 +402,14 @@ class TestPosicoesDesatualizadas:
         assert self._stale(mutar) == []
 
     def test_vitrine_muda_sem_mexer_na_ficha_marca_so_a_2(self):
-        """`FLAVOR` fica fora dos 3 bullets (BRAND, MODEL, FLAVOR vem antes de
-        UNIT_VOLUME na ordem alfabetica... mas o corte em MAX_BULLETS deixa
-        algum de fora). Seja qual for o que sobra, a copy do LLM le todos:
-        a posicao 2 tem de ser marcada mesmo quando a ficha nao muda."""
-        from app.services.attribute_impact import snapshot_attributes, stale_positions
+        """`PACKAGE_TYPE` fica FORA dos 3 bullets (o corte em MAX_BULLETS
+        para em BRAND, MODEL, FLAVOR), mas a copy do LLM le todos os
+        atributos de vitrine. Entao a posicao 2 e' marcada e as outras duas
+        nao: a ficha nao mudou e o volume tambem nao."""
+        def mutar(attrs):
+            attrs[6].value_name = "Refil"
 
-        antes_attrs = _base()
-        antes = snapshot_attributes(antes_attrs)
-        depois_attrs = _base()
-        depois_attrs[3].value_name = "Lichia"
-        depois = snapshot_attributes(depois_attrs)
-        stale = stale_positions(antes, depois, TODAS)
-        assert 2 in stale
-        assert 1 not in stale
+        assert self._stale(mutar) == [2]
 
     def test_so_posicoes_existentes_entram(self):
         """Anuncio sem imagem gerada nao recebe aviso de imagem."""
@@ -598,9 +596,7 @@ def stale_positions(
 - [ ] **Step 5: Rodar o teste e confirmar que passa**
 
 Run: `cd backend && python -m pytest tests/test_impacto_edicao_atributo.py -q`
-Expected: PASS (16 passed)
-
-Se `test_vitrine_muda_sem_mexer_na_ficha_marca_so_a_2` falhar porque `FLAVOR` acabou **dentro** dos 3 bullets (a ordem é `BRAND`, `MODEL`, depois alfabética: `FLAVOR` vem antes de `UNIT_VOLUME`), troque no teste o atributo mutado por um que caia fora do corte — acrescente `_attr("COLOR", "Preto", "Cor")` ao `_base()` e mute `UNIT_VOLUME`... **não**: isso marcaria a posição 1. Em vez disso, acrescente ao `_base()` um quinto atributo de vitrine `_attr("VOLUME_CAPACITY", "200 ml", "Capacidade")` e mute **ele** — vem depois de `UNIT_VOLUME` na ordem alfabética, logo fora dos 3 bullets. Ajuste o `assert` de `test_vitrine_ignora_os_excluidos_da_ficha` para incluir o id novo.
+Expected: PASS (14 passed)
 
 - [ ] **Step 6: Rodar os testes da ficha para garantir que a extração não mudou comportamento**
 
@@ -1151,7 +1147,7 @@ from app.services.attribute_impact import snapshot_attributes, stale_positions
 - [ ] **Step 5: Rodar o teste e confirmar que passa**
 
 Run: `cd backend && python -m pytest tests/test_editar_atributos_service.py -q`
-Expected: PASS (26 passed)
+Expected: PASS (28 passed)
 
 - [ ] **Step 6: Rodar a suíte inteira**
 
@@ -1903,7 +1899,7 @@ async def regenerate_description(
 - [ ] **Step 5: Rodar o teste e confirmar que passa**
 
 Run: `cd backend && python -m pytest tests/test_regerar_descricao.py -q`
-Expected: PASS (13 passed)
+Expected: PASS (14 passed)
 
 - [ ] **Step 6: Rodar a suíte inteira**
 
