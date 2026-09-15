@@ -9,6 +9,7 @@ import {
   resumeRawPhotos,
   resumeAiEngine,
   regenerateDescription,
+  activateListing,
 } from "@/lib/api/listings"
 import { ApiError } from "@/lib/api/client"
 import { describeResumeError, standbyGuidance } from "@/lib/standby-guidance"
@@ -27,6 +28,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Trash2,
+  Info,
 } from "lucide-react"
 import { useState } from "react"
 import Link from "next/link"
@@ -141,6 +143,18 @@ export default function ListingDetailPage() {
       toast.error(err.message || "Erro ao regerar descrição")
     },
     onSettled: () => setConfirmingRegenDescription(false),
+  })
+
+  const activateMutation = useMutation({
+    mutationFn: () => activateListing(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["listing", id] })
+      queryClient.invalidateQueries({ queryKey: ["listings"] })
+      toast.success("Anúncio reativado no Mercado Livre")
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Erro ao reativar anúncio")
+    },
   })
 
   const deleteMutation = useMutation({
@@ -455,6 +469,79 @@ export default function ListingDetailPage() {
           <CardContent className="py-8 text-center">
             <CheckCircle className="w-10 h-10 text-green-500 mx-auto mb-3" />
             <p className="font-semibold text-green-900 text-lg">Anúncio publicado!</p>
+            {listing.mlb_id && (
+              <a
+                href={`https://produto.mercadolivre.com.br/${listing.mlb_id.replace(/^MLB/, "MLB-")}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm mt-3"
+              >
+                Ver no Mercado Livre: {listing.mlb_id}
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {status === "published_paused" && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardHeader>
+            <CardTitle className="text-base text-amber-900 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5" />
+              Anúncio pausado no Mercado Livre
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-amber-800 mb-4">
+              O anúncio existe no ML mas não está recebendo visitas. Isso pode
+              ser falta de estoque, moderação do ML — ou a publicação não
+              chegou a ativá-lo. Confira no ML e reative quando estiver tudo
+              certo.
+            </p>
+            {listing.mlb_id && (
+              <a
+                href={`https://produto.mercadolivre.com.br/${listing.mlb_id.replace(/^MLB/, "MLB-")}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm mb-4"
+              >
+                Ver no Mercado Livre: {listing.mlb_id}
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+            <Button
+              onClick={() => activateMutation.mutate()}
+              disabled={activateMutation.isPending}
+              className="w-full"
+            >
+              {activateMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Reativando...
+                </>
+              ) : (
+                "Reativar anúncio"
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {status === "published_under_review" && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardHeader>
+            <CardTitle className="text-base text-blue-900 flex items-center gap-2">
+              <Info className="w-5 h-5" />
+              Em análise no Mercado Livre
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-blue-800">
+              O ML está revisando este anúncio (moderação ou exigência de
+              catálogo). Não há ação aqui: a decisão é do ML e aparece na
+              conta do seller.
+            </p>
             {listing.mlb_id && (
               <a
                 href={`https://produto.mercadolivre.com.br/${listing.mlb_id.replace(/^MLB/, "MLB-")}`}

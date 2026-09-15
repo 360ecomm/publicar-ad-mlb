@@ -15,6 +15,7 @@ export type ListingStatus =
   | "ready_to_publish"
   | "publishing"
   | "published"
+  | "published_under_review"
   | "published_paused"
   | "failed"
 
@@ -146,7 +147,8 @@ export const STATUS_LABELS: Record<ListingStatus, string> = {
   ready_to_publish: "Pronto para publicar",
   publishing: "Publicando",
   published: "Publicado",
-  published_paused: "Pausado",
+  published_under_review: "Em análise no ML",
+  published_paused: "Pausado no ML",
   failed: "Com erro",
 }
 
@@ -155,12 +157,15 @@ export const STATUS_LABELS: Record<ListingStatus, string> = {
 //
 // - processing: o sistema está trabalhando, nada a fazer.
 // - waiting:    exige ação humana. `failed` fica aqui (erro exige decisão),
-//               `draft` também (espera alguém iniciar o pipeline) e
-//               `ready_to_publish` idem (última decisão humana antes do ML).
-// - done:       no ar ou pausado no ML.
+//               `draft` também (espera alguém iniciar o pipeline),
+//               `ready_to_publish` idem (última decisão humana antes do ML)
+//               e `published_paused` (anomalia: o ML pausou ou nós nunca
+//               ativamos — o operador reativa pela tela do anúncio).
+// - done:       no ar, ou em análise do ML (`published_under_review` — nada
+//               a fazer daqui; a moderação é lá).
 //
 // STATUS_GROUP_OF é a única fonte: um Record<ListingStatus, ...> obriga cada
-// um dos 16 status a aparecer EXATAMENTE uma vez (chave faltando ou repetida
+// um dos 17 status a aparecer EXATAMENTE uma vez (chave faltando ou repetida
 // é erro de compilação). Status novo no backend, adicionado em ListingStatus,
 // derruba o `tsc` até ganhar um bloco — nunca fica invisível na barra.
 // ---------------------------------------------------------------------------
@@ -182,7 +187,8 @@ export const STATUS_GROUP_OF: Record<ListingStatus, StatusGroupKey> = {
   ready_to_publish: "waiting",
   publishing: "processing",
   published: "done",
-  published_paused: "done",
+  published_under_review: "done",
+  published_paused: "waiting",
   failed: "waiting",
 }
 

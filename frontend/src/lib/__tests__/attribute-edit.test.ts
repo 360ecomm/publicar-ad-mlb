@@ -66,6 +66,7 @@ test("status editáveis batem com o backend", () => {
   for (const s of [
     "generating_title", "predicting_category", "generating_images",
     "generating_description", "publishing", "published", "published_paused",
+    "published_under_review",
   ]) assert.equal(isEditableStatus(s as never), false, s)
 })
 

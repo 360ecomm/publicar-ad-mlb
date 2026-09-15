@@ -22,6 +22,7 @@ const STATUS_VARIANTS: Record<
   ready_to_publish: "default",
   publishing: "secondary",
   published: "default",
+  published_under_review: "outline",
   published_paused: "outline",
   failed: "destructive",
 }
@@ -35,6 +36,7 @@ const C = {
 
 const STATUS_COLORS: Partial<Record<ListingStatus, string>> = {
   published:                C.green,
+  published_under_review:   C.yellow,
   published_paused:         C.yellow,
   ready_to_publish:         C.blue,
   pending_title_approval:   C.yellow,

@@ -162,7 +162,9 @@ export function BulkActionsBar({ selected, offPageCount, onClear, onDone }: Prop
               Publicar {selected.length} {selected.length === 1 ? "anúncio" : "anúncios"} no Mercado Livre?
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
-              A publicação é irreversível: o anúncio vai ao ar na conta conectada.
+              {selected.length === 1
+                ? "O anúncio vai ao ar imediatamente na conta conectada e passa a receber visitas e vendas."
+                : "Os anúncios vão ao ar imediatamente na conta conectada e passam a receber visitas e vendas."}
             </p>
             <ul className="mt-3 max-h-48 overflow-y-auto rounded border border-border divide-y divide-border text-sm">
               {selected.map((s) => (

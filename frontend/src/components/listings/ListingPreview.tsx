@@ -162,12 +162,12 @@ export function ListingPreview({ listing }: Props) {
             Publicando...
           </>
         ) : (
-          "Confirmar e Publicar"
+          "Publicar agora"
         )}
       </Button>
 
       <p className="text-xs text-slate-400 text-center">
-        O anúncio será publicado diretamente no Mercado Livre.
+        O anúncio vai ao ar imediatamente no Mercado Livre e passa a receber visitas e vendas.
       </p>
     </div>
   )
