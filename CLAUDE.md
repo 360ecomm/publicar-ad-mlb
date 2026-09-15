@@ -901,6 +901,22 @@ subdivide. A distinção de tipo vive no atributo `PERFUME_TYPE`, não na árvor
 > foi o título trazer marca e "Colônia". **Não há revisão humana de categoria
 > hoje** — é o item pendente da Fase 6.
 
+> **Em lote não há revisão humana de TÍTULO tampouco.** `_generate_title_async`
+> com `batch_mode=True` grava `selected_title = titles[0]` e segue direto para
+> `predicting_category`; o status `pending_title_approval` só existe no caminho
+> manual. Como a categoria é prevista **a partir do título**, um título ruim em
+> lote contamina a categoria sem ninguém ver — e ainda alimenta `family_name`,
+> a copy da posição 2 e a descrição.
+>
+> Consequência a conhecer: `title_guard.cortar_na_ultima_palavra` tem **um**
+> caso em que devolve fragmento — título que é uma palavra só, maior que o
+> limite, onde não existe fronteira onde cortar. Ele grava
+> `logger.warning ... result=sem_fronteira`, e **em lote esse log é o único
+> sinal que existe**: ninguém olha o título antes da geração de imagens. A
+> alternativa seria falhar o anúncio; ficou assim porque entrada patológica não
+> deve derrubar a esteira. Revisitar junto com a revisão humana de título e
+> categoria antes da geração de imagens.
+
 Cuidado com a homônima: **`MLB178938`** também se chama "Perfumes", mas é
 `Pet Shop > Cães > … > Perfumes`. É a origem do caso `"Colônia"` — valor válido
 lá e inexistente em MLB6284, onde o equivalente é `"Água de colônia"`.
