@@ -56,7 +56,7 @@ continuam como estão.
   em 5 tentativas × 2 s. Se o `picture_download_pending` não limpar nesse
   intervalo, o estado reportado é o último visto (tipicamente `paused`) e o
   anúncio fica `published_paused` mesmo que o ML o ative minutos depois — o
-  operador confere no ML e reativa o rótulo local não é destino final errado,
+  operador confere no ML e reativa; o rótulo local não é destino final errado,
   é foto do momento. Alongar a espera não entrou no escopo.
 - **Limitação conhecida (2):** o `estado_ml` gravado é a foto tirada ANTES do
   `POST /description` (a ordem interna de `publish()` não mudou); se o envio
@@ -71,3 +71,25 @@ continuam como estão.
 Suíte em `c816332`: **671 passed / 88 skipped** sem `TEST_DATABASE_URL`;
 **759 passed** com ela. Fim: revisão do branch inteiro; publicar a branch
 `feat/publicar-ativo` **sem merge e sem deploy**.
+
+## Notas de deploy e pendências (da revisão final, 2026-09-15)
+
+- **Antes do deploy do frontend:** os `published_paused` legados (anúncios
+  31, 37 e 38, e o que mais houver) passam a aparecer em "Esperando você"
+  com o botão "Reativar anúncio" — mas foram pausados de propósito no regime
+  antigo, e o 37 está `under_review` no ML por exigência de catálogo (reativar
+  não resolve). Rodar `SELECT id, sku_external_id, mlb_id FROM listings WHERE
+  status = 'published_paused'` em produção e decidir, linha a linha com o
+  Daniel, o que é "reativar" e o que é "deixar quieto".
+- **Pendência (tarefa própria, junto com visibilidade de moderação):**
+  `published_under_review` não tem NENHUM comportamento além de existir —
+  ninguém volta a perguntar ao ML o que aconteceu; um anúncio pode ficar ali
+  para sempre. O mesmo vale para `activate_listing`, que grava `published`
+  sem ler a resposta do PUT (se o ML re-pausar na hora por falta de estoque,
+  o rótulo local fica errado até alguém notar) e repassa o texto cru do ML
+  no 502.
+- **Cobertura deixada de fora de propósito (triagem da revisão final):** o
+  limite de 5 iterações de `_aguardar_validacao` não tem teste (escrever com
+  `side_effect` limitado, nunca mock constante — senão trava em vez de
+  falhar) e o body do modo catálogo não crava `"status": "active"` em teste
+  (carregado por construção do dict).

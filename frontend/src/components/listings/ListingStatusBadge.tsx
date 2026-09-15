@@ -36,7 +36,7 @@ const C = {
 
 const STATUS_COLORS: Partial<Record<ListingStatus, string>> = {
   published:                C.green,
-  published_under_review:   C.yellow,
+  published_under_review:   C.blue,
   published_paused:         C.yellow,
   ready_to_publish:         C.blue,
   pending_title_approval:   C.yellow,

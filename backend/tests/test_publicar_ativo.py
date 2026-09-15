@@ -5,6 +5,9 @@ enviado na criacao e devolve o item em outro estado; o PUT que vinha em
 seguida e' que o pausava. Esta branch para de desfazer o padrao do ML:
 cria ativo, espera a validacao das fotos e reporta o que o ML decidiu.
 """
+import logging
+
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -153,6 +156,57 @@ class TestPublishCriaAtivoESemPut:
         mock_put.assert_not_called()
 
 
+class TestPublishSobreviveAFalhaPosCriacao:
+    """F1: a partir do POST bem-sucedido o item JA esta no ar. Falha nas
+    etapas seguintes (checagem de estado, descricao) NAO PODE subir — subiria
+    ao retry do Celery, que criaria um SEGUNDO item vivo (`publish()` roda de
+    novo do zero). `publish()` engole a excecao, loga, e devolve o estado da
+    criacao como "foto do momento"."""
+
+    @pytest.mark.asyncio
+    async def test_erro_de_rede_no_polling_nao_sobe_e_devolve_estado_da_criacao(self):
+        create_response = MagicMock()
+        create_response.status_code = 201
+        create_response.json.return_value = {
+            "id": "MLB1", "status": "paused", "sub_status": ["picture_download_pending"],
+        }
+        mock_put = AsyncMock()
+        with patch("httpx.AsyncClient") as mock_client_cls, \
+             patch("asyncio.sleep", new_callable=AsyncMock), \
+             _sem_teto_de_categoria():
+            client = mock_client_cls.return_value.__aenter__.return_value
+            client.post = AsyncMock(return_value=create_response)
+            client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
+            client.put = mock_put
+            item_id, estado = await PublishService(db=MagicMock()).publish(
+                listing=_listing(), attributes=[], images=[_image()],
+                description_html=None, access_token="token",
+            )
+        assert (item_id, estado) == ("MLB1", "paused")
+        mock_put.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_erro_ao_postar_descricao_nao_sobe_e_ainda_devolve_o_item(self):
+        create_response = MagicMock()
+        create_response.status_code = 201
+        create_response.json.return_value = {"id": "MLB1", "status": "active", "sub_status": []}
+        mock_put = AsyncMock()
+        with patch("httpx.AsyncClient") as mock_client_cls, _sem_teto_de_categoria(), \
+             patch.object(
+                 PublishService, "_post_description",
+                 new_callable=AsyncMock, side_effect=httpx.ConnectError("boom"),
+             ):
+            client = mock_client_cls.return_value.__aenter__.return_value
+            client.post = AsyncMock(return_value=create_response)
+            client.put = mock_put
+            item_id, estado = await PublishService(db=MagicMock()).publish(
+                listing=_listing(), attributes=[], images=[_image()],
+                description_html="<p>oi</p>", access_token="token",
+            )
+        assert (item_id, estado) == ("MLB1", "active")
+        mock_put.assert_not_called()
+
+
 class TestInvariantes:
     def test_ensure_paused_nao_existe_mais(self):
         """Guarda contra reintroducao E contra patch antigo passando em silencio."""
@@ -229,3 +283,19 @@ class TestWorkerGravaOEstadoTraduzido:
 
     def test_paused_grava_published_paused(self):
         assert self._roda_worker("paused").status == "published_paused"
+
+    def test_paused_loga_o_warning_de_anomalia(self, caplog):
+        # F2: published_paused e' o balde de anomalia — tem que deixar rastro.
+        with caplog.at_level(logging.WARNING, logger="app.workers.tasks.publish_tasks"):
+            self._roda_worker("paused")
+        avisos = [r for r in caplog.records if r.getMessage().startswith("publish_estado_nao_ativo")]
+        assert len(avisos) == 1
+        assert "estado_ml=paused" in avisos[0].getMessage()
+        assert "status_local=published_paused" in avisos[0].getMessage()
+
+    def test_active_nao_loga_warning_nenhum(self, caplog):
+        # Caminho feliz nao pode gerar ruido de anomalia no log.
+        with caplog.at_level(logging.WARNING, logger="app.workers.tasks.publish_tasks"):
+            self._roda_worker("active")
+        avisos = [r for r in caplog.records if r.getMessage().startswith("publish_estado_nao_ativo")]
+        assert avisos == []

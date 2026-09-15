@@ -56,9 +56,10 @@ LISTING_STATUSES: tuple[str, ...] = (
 #   publishing             `publish_tasks` le os atributos para o payload do
 #                          ML: a edicao iria ao ar sem revisao nenhuma, ou
 #                          derrubaria a publicacao com 422 no momento mais caro
-#   published /            editar anuncio NO AR e' pendencia futura, com
-#   published_under_review regras proprias (o ML tem API de update)
-#   published_paused
+#   published / published_under_review / published_paused
+#                          editar anuncio NO AR (ou em analise no ML) e'
+#                          pendencia futura, com regras proprias (o ML tem
+#                          API de update)
 EDITABLE_ATTRIBUTE_STATUSES: frozenset[str] = frozenset({
     "draft",
     "pending_title_approval",

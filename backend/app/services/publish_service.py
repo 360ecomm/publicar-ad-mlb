@@ -221,10 +221,22 @@ class PublishService:
         item_data = resp.json()
         item_id = item_data["id"]
 
-        estado_final = await self._aguardar_validacao(item_id, item_data, access_token)
+        # A partir daqui o item JA existe no ML — e ja esta NO AR. Nenhuma
+        # falha das etapas seguintes pode escapar desta funcao: a excecao
+        # subiria ao retry do Celery, que criaria um SEGUNDO item vivo. O
+        # que nao der para apurar vira estado desconhecido ("") e cai no
+        # balde de anomalia (published_paused), com o mlb_id preservado.
+        try:
+            estado_final = await self._aguardar_validacao(item_id, item_data, access_token)
+        except Exception as exc:
+            logger.warning("publish_pos_criacao item=%s falha ao checar estado: %s", item_id, exc)
+            estado_final = item_data.get("status") or ""
 
         if description_html:
-            await self._post_description(item_id, description_html, access_token)
+            try:
+                await self._post_description(item_id, description_html, access_token)
+            except Exception as exc:
+                logger.warning("publish_pos_criacao item=%s falha na descricao: %s", item_id, exc)
 
         return item_id, estado_final
 

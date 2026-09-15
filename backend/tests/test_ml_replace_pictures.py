@@ -1,8 +1,8 @@
 """Substituicao da lista de fotos de um item JA publicado no ML.
 
 Ate aqui o codigo so sabia CRIAR item (`publish`, um POST) e mudar status
-(`activate_listing`/`_aguardar_validacao`, PUT de um campo so). Trocar foto de
-anuncio no ar era script manual.
+(`activate_listing`, PUT de um campo so). Trocar foto de anuncio no ar era
+script manual.
 
 A regra que estes testes travam: o PUT de `pictures` no ML e SUBSTITUICAO
 TOTAL, nao merge. Mandar 2 IDs num item de 8 fotos nao troca 2 — deixa o
