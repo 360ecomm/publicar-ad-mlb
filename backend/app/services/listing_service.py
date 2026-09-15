@@ -1202,18 +1202,42 @@ class ListingService:
                 if not listing:
                     results.append(BulkItemResult(listing_id=lid, success=False, error="estado inválido"))
                     continue
-                attr_r = await self.db.execute(
-                    sa_update(ListingAttribute)
-                    .where(
+                # Carrega a linha em vez de dar UPDATE cego: `_validar_valor`
+                # precisa de `allowed_values` e `attribute_type`. Ate aqui
+                # esta era a UNICA porta que gravava valor de atributo sem
+                # validar — um valor invalido so aparecia na publicacao, como
+                # `Attribute [X] is not valid`, depois de ja ter gasto
+                # geracao de imagem e descricao.
+                attr = (await self.db.execute(
+                    select(ListingAttribute).where(
                         ListingAttribute.listing_id == lid,
                         ListingAttribute.attribute_id == attribute_id,
                     )
-                    .values(value_name=value_name, value_id=value_id)
-                    .execution_options(synchronize_session=False)
-                )
-                if attr_r.rowcount == 0:
+                )).scalar_one_or_none()
+                if attr is None:
                     results.append(BulkItemResult(listing_id=lid, success=False, error="atributo não encontrado"))
                     continue
+                try:
+                    novo_id, novo_nome = self._validar_valor(
+                        attr,
+                        {"attribute_id": attribute_id, "value_id": value_id, "value_name": value_name},
+                    )
+                except HTTPException:
+                    # Mensagem CURTA de proposito: a de `_validar_valor` lista
+                    # ate 15 valores aceitos e passa dos 200 chars que o
+                    # `sanitizeBulkError` do frontend usa como corte para
+                    # "erro tecnico" — o operador veria a mensagem generica no
+                    # lugar do motivo. Um item invalido tambem nao pode
+                    # derrubar o lote inteiro com 422.
+                    results.append(BulkItemResult(
+                        listing_id=lid,
+                        success=False,
+                        error=f"valor {value_name!r} não é válido para '{attr.attribute_name}' nesta categoria"[:200],
+                    ))
+                    continue
+                attr.value_id = novo_id
+                attr.value_name = novo_nome
+                attr.source = "seller"
                 # Advance status if all required attrs are now filled
                 unfilled_r = await self.db.execute(
                     select(ListingAttribute).where(
