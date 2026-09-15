@@ -416,8 +416,23 @@ class ListingService:
 
         # 1) Resolve TUDO antes de escrever: um 422 no terceiro item nao pode
         #    deixar os dois primeiros gravados.
-        resolvidos = []
+        #
+        #    Dedup por `attribute_id` ANTES de resolver: `submitted` com o
+        #    MESMO atributo duas vezes nao e' duas edicoes, e' a intencao mais
+        #    recente do operador sobrescrevendo a anterior. Sem isso o laco de
+        #    escrita aplicava as duas (a ultima vencia de qualquer jeito) mas
+        #    `approved_count` contava o mesmo atributo DUAS VEZES — um dado
+        #    falso no evento de auditoria (ver docstring de
+        #    `ListingReviewEvent.approved_count`, que define esse numero como
+        #    "quantos atributos MUDARAM de valor de fato"). Mesmo principio de
+        #    `approve_images` (`dict.fromkeys` nos ids); aqui a chave e' o
+        #    `attribute_id` e o VALOR mais recente e' o que fica.
+        ultimos: dict = {}
         for item in submitted:
+            ultimos[item.get("attribute_id")] = item
+
+        resolvidos = []
+        for item in ultimos.values():
             attr = por_id.get(item.get("attribute_id"))
             if attr is None:
                 continue  # atributo de outra categoria: ignorado, como no PUT

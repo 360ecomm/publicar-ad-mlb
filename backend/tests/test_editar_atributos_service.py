@@ -1,6 +1,7 @@
 """Correcao de atributo ja gravado — guardas e semantica do service.
 Sem banco (sempre roda). O comportamento com linhas reais esta em
 `test_editar_atributos_pg.py`."""
+import re
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,11 +19,11 @@ def _listing(status="ready_to_publish"):
     return listing
 
 
-def _attr(attribute_id, value_name, *, tipo="string", required=False, allowed=None):
+def _attr(attribute_id, value_name, *, tipo="string", required=False, allowed=None, value_id=None):
     return SimpleNamespace(
         attribute_id=attribute_id,
         attribute_name=attribute_id.title(),
-        value_id=None,
+        value_id=value_id,
         value_name=value_name,
         attribute_type=tipo,
         is_required=required,
@@ -159,7 +160,10 @@ class TestRecusaAntesDeEscrever:
     async def test_opcional_pode_ser_esvaziado(self):
         from app.services.listing_service import ListingService
 
-        alvo = _attr("FLAVOR", "Chocolate")
+        # value_id="123" de proposito: a fabrica ja nasceria com None, entao
+        # sem um valor inicial a asserção abaixo nao provaria que o `edit_attributes`
+        # de fato apagou o value_id — so que ele "continuou None".
+        alvo = _attr("FLAVOR", "Chocolate", value_id="123")
         db = _db([alvo])
         await ListingService(db).edit_attributes(
             _listing(), [{"attribute_id": "FLAVOR", "value_name": ""}],
@@ -182,6 +186,31 @@ class TestRecusaAntesDeEscrever:
         assert exc.value.status_code == 422
         db.add.assert_not_called()
         db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_valor_id_gravado_nao_entra_na_comparacao_de_mudanca(self):
+        """Caso real (CLAUDE.md): BRAND em MLB6284 e' `string` com
+        `allowed_values` de SUGESTOES. MLB5145387291 esta ativo com
+        `value_id='13065330'` `value_name='Wepink'` — id que o proprio ML
+        atribuiu. O formulario reenvia so o `value_name` (sem id); comparar
+        tambem por `value_id` marcaria isso como mudanca e apagaria um
+        `value_id` valido. Sem este teste, `attr.value_name != value_name or
+        attr.value_id != value_id` passaria nos outros 27 casos sem ser pego."""
+        from app.services.listing_service import ListingService
+
+        alvo = _attr(
+            "BRAND", "Wepink", value_id="13065330",
+            allowed=[{"id": "13065330", "name": "Wepink"}],
+        )
+        db = _db([alvo])
+        with pytest.raises(HTTPException) as exc:
+            await ListingService(db).edit_attributes(
+                _listing(), [{"attribute_id": "BRAND", "value_name": "Wepink"}],
+                user_id=uuid.uuid4(),
+            )
+        assert exc.value.status_code == 422
+        assert "Nenhum atributo foi alterado" in exc.value.detail
+        assert alvo.value_id == "13065330"
 
     @pytest.mark.asyncio
     async def test_atributo_de_outro_anuncio_e_ignorado(self):
@@ -230,9 +259,17 @@ class TestNaoAvancaNemDispara:
             _listing(), [{"attribute_id": "FLAVOR", "value_name": "Lichia"}],
             user_id=uuid.uuid4(),
         )
+        # `self.db.delete(obj)` nao passa por `db.execute` — o AsyncMock
+        # engoliria em silencio sem esta checagem em separado.
+        db.delete.assert_not_called()
         sql = " ".join(str(c.args[0]) for c in db.execute.await_args_list).lower()
         assert "delete" not in sql
-        assert "update" not in sql
+        # Checagem por PALAVRA (\b), nao substring: `str(select(X))` de
+        # qualquer entidade com coluna `updated_at` contem a substring
+        # "update" mesmo sem nenhum UPDATE ter sido emitido — so passa hoje
+        # por acidente porque `ListingAttribute`/`ListingImage` nao tem essa
+        # coluna. `\bupdate\b` nao casaria com "updated_at".
+        assert not re.search(r"\bupdate\b", sql)
 
 
 class TestEvento:
@@ -277,6 +314,27 @@ class TestEvento:
             ],
             user_id=uuid.uuid4(),
         )
+        assert db.add.call_args.args[0].approved_count == 1
+
+    @pytest.mark.asyncio
+    async def test_attribute_id_repetido_na_submissao_conta_uma_vez_e_ultimo_valor_vence(self):
+        """`submitted` com o MESMO attribute_id duas vezes nao e' duas
+        edicoes — e' a intencao mais recente do operador sobrescrevendo a
+        anterior. Sem dedup, `approved_count` contaria o atributo duas vezes:
+        dado falso no evento de auditoria."""
+        from app.services.listing_service import ListingService
+
+        alvo = _attr("FLAVOR", "Chocolate")
+        db = _db([alvo])
+        await ListingService(db).edit_attributes(
+            _listing(),
+            [
+                {"attribute_id": "FLAVOR", "value_name": "Lichia"},
+                {"attribute_id": "FLAVOR", "value_name": "Baunilha"},
+            ],
+            user_id=uuid.uuid4(),
+        )
+        assert alvo.value_name == "Baunilha"
         assert db.add.call_args.args[0].approved_count == 1
 
 
