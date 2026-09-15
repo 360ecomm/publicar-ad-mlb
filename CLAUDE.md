@@ -901,6 +901,25 @@ subdivide. A distinção de tipo vive no atributo `PERFUME_TYPE`, não na árvor
 > foi o título trazer marca e "Colônia". **Não há revisão humana de categoria
 > hoje** — é o item pendente da Fase 6.
 
+> **Pendência (2026-09-15): divergência na predição de categoria, a
+> investigar.** O Daniel testou por script próprio, 5 vezes, o título original
+> do SKU 3 ("Body Splash Obsessed Wepink 200ml") contra a API do ML e obteve
+> `MLB6284` (Perfumes) nas 5. Nosso pipeline classificou o mesmo SKU como
+> `MLB269718` (Águas Minerais). Não é bloqueante, mas a categoria decide
+> atributos, imagens e onde o anúncio aparece — divergência entre o que
+> testamos e o que o sistema faz não pode ficar sem explicação. A verificar,
+> quando for a hora:
+>
+> 1. **O que o nosso código envia de verdade** ao `domain_discovery`: a string
+>    exata, o endpoint e todos os parâmetros — comparar com uma chamada crua
+>    equivalente.
+> 2. **Se há algo fixado em código** vindo da primeira tentativa de junho —
+>    mapa de categoria, valor padrão, atalho por marca ou por termo. Hipótese
+>    levantada pelo Daniel; precisa de resposta com evidência, não com "não
+>    achei".
+> 3. **Se a API do ML é determinística** para a mesma entrada, ou se a ordem
+>    dos resultados varia entre chamadas.
+
 > **Em lote não há revisão humana de TÍTULO tampouco.** `_generate_title_async`
 > com `batch_mode=True` grava `selected_title = titles[0]` e segue direto para
 > `predicting_category`; o status `pending_title_approval` só existe no caminho
