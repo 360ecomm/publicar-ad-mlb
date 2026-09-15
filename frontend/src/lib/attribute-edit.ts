@@ -1,4 +1,4 @@
-import type { AttributeOut, ListingStatus } from "@/types/listing"
+import type { AttributeOut, AttributesEditResponse, ListingStatus, ListingSummary } from "@/types/listing"
 
 /**
  * Espelha `EDITABLE_ATTRIBUTE_STATUSES` em `backend/app/models/listing.py`.
@@ -59,4 +59,23 @@ export function buildEditPayload(
     })
   }
   return items
+}
+
+/**
+ * Distingue `AttributesEditResponse` de `ListingSummary` pelo FORMATO real
+ * da resposta, não pelo `mode` do formulário.
+ *
+ * `mode` vem de uma prop derivada do status do listing; se o componente pai
+ * re-renderizar com um `mode` diferente entre o `mutate()` (que decide qual
+ * requisição sai, `editAttributes` ou `submitAttributes`) e a resolução da
+ * promise, o `onSuccess` que roda é o da renderização mais nova — com um
+ * `mode` que não corresponde mais ao tipo do `result` já em trânsito. Sem
+ * este guard, um cast (`result as AttributesEditResponse`) mentiria sobre o
+ * tipo e `AttributeEditWarning` estouraria ao ler `stale_positions`/
+ * `duplicated_fields` de um `ListingSummary`.
+ */
+export function isAttributesEditResponse(
+  result: ListingSummary | AttributesEditResponse,
+): result is AttributesEditResponse {
+  return "stale_positions" in result
 }

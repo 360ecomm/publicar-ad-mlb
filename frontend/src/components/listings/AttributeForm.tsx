@@ -12,7 +12,7 @@ import { ChevronDown, Info, Loader2 } from "lucide-react"
 import type { AttributeOut, AttributesEditResponse, ListingSummary } from "@/types/listing"
 import { classifyAttributes, fixedValue } from "@/lib/attribute-visibility"
 import { fieldKindFor, matchSuggestion } from "@/lib/attribute-field"
-import { buildEditPayload } from "@/lib/attribute-edit"
+import { buildEditPayload, isAttributesEditResponse } from "@/lib/attribute-edit"
 
 interface AttributeValue {
   value_id?: string
@@ -75,7 +75,16 @@ export function AttributeForm({ listingId, attributes, mode = "submit", onEdited
       queryClient.invalidateQueries({ queryKey: ["listings"] })
       if (mode === "edit") {
         toast.success("Correção salva. A etapa do anúncio não mudou.")
-        onEdited?.(result as AttributesEditResponse)
+        // `mode` pode estar desatualizado em relação ao `result` (closure de
+        // uma renderização mais nova que a que disparou a mutation — ver
+        // `isAttributesEditResponse`). O caminho seguro quando o formato não
+        // bate é simplesmente não chamar `onEdited`: sem isso o
+        // `AttributeEditWarning` estouraria lendo `stale_positions` de um
+        // `ListingSummary`. A correção em si já foi salva; só o aviso é
+        // pulado.
+        if (isAttributesEditResponse(result)) {
+          onEdited?.(result)
+        }
         return
       }
       toast.success("Atributos salvos com sucesso!")

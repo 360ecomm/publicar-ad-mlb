@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
-import { buildEditPayload, isEditableStatus } from "../attribute-edit"
-import type { AttributeOut } from "@/types/listing"
+import { buildEditPayload, isEditableStatus, isAttributesEditResponse } from "../attribute-edit"
+import type { AttributeOut, AttributesEditResponse, ListingSummary } from "@/types/listing"
 
 const attr = (id: string, value_name: string | null): AttributeOut =>
   ({
@@ -50,4 +50,33 @@ test("status editáveis batem com o backend", () => {
     "generating_title", "predicting_category", "generating_images",
     "generating_description", "publishing", "published", "published_paused",
   ]) assert.equal(isEditableStatus(s as never), false, s)
+})
+
+const listingSummary = {
+  id: "l1",
+  sku_external_id: "SKU1",
+  sku_brand: "Marca",
+  selected_title: null,
+  sku_description: "desc",
+  ml_category_id: null,
+  approved_image_count: 0,
+  status: "ready_to_publish",
+  created_via: "manual",
+  mlb_id: null,
+  created_at: "2026-09-15T00:00:00Z",
+  updated_at: "2026-09-15T00:00:00Z",
+} as ListingSummary
+
+const attributesEditResponse = {
+  listing: listingSummary,
+  stale_positions: [4],
+  duplicated_fields: [],
+} as AttributesEditResponse
+
+test("isAttributesEditResponse aceita a resposta do PATCH", () => {
+  assert.equal(isAttributesEditResponse(attributesEditResponse), true)
+})
+
+test("isAttributesEditResponse recusa um ListingSummary (resposta do PUT)", () => {
+  assert.equal(isAttributesEditResponse(listingSummary), false)
 })
