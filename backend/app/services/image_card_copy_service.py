@@ -202,6 +202,22 @@ SPECS_EXCLUDED_ATTRIBUTE_IDS = frozenset({
 SPECS_PRIORITY_ATTRIBUTE_IDS = ("BRAND", "MODEL")
 
 
+def specs_candidate_attributes(attributes: list | None) -> list:
+    """Atributos que DESCREVEM O PRODUTO na vitrine.
+
+    Unica definicao do recorte. A ficha (`build_specs_card`) monta os bullets
+    a partir daqui, e `attribute_impact` usa o mesmo conjunto para decidir se
+    a copy da posicao 2 ficou desatualizada — a copy do LLM le os atributos
+    do produto, nao o SKU interno nem o peso da caixa. Duas copias do filtro
+    divergiriam em silencio.
+    """
+    return [
+        a for a in (attributes or [])
+        if getattr(a, "value_name", None)
+        and getattr(a, "attribute_id", None) not in SPECS_EXCLUDED_ATTRIBUTE_IDS
+    ]
+
+
 def build_specs_card(attributes: list | None) -> CardCopy | None:
     """Ficha tecnica montada a partir dos atributos, sem LLM nenhum.
 
@@ -221,11 +237,7 @@ def build_specs_card(attributes: list | None) -> CardCopy | None:
     uma ficha de uma linha so. `card_benefits` e `card_usage` continuam com o
     LLM: aquilo e narrativa, isto e dado.
     """
-    candidatos = [
-        a for a in (attributes or [])
-        if getattr(a, "value_name", None)
-        and getattr(a, "attribute_id", None) not in SPECS_EXCLUDED_ATTRIBUTE_IDS
-    ]
+    candidatos = specs_candidate_attributes(attributes)
 
     prioridade = {aid: i for i, aid in enumerate(SPECS_PRIORITY_ATTRIBUTE_IDS)}
     candidatos.sort(
