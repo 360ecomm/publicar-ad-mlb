@@ -39,6 +39,23 @@ test("valor nulo no servidor conta como vazio", () => {
   assert.deepEqual(buildEditPayload([attr("FLAVOR", null)], atual), [])
 })
 
+test("atributo fixed sem valor gravado não entra no payload de correção", () => {
+  // O formulário pré-preenche `fixed` a partir do único `allowed_value` (ver
+  // `fixedValue`), então o estado da tela tem VEHICLE_TYPE preenchido mesmo
+  // com o banco vazio. O operador só mexeu no FLAVOR.
+  const fixo = {
+    ...attr("VEHICLE_TYPE", null),
+    tags: { fixed: true },
+    allowed_values: [{ id: "1", name: "Carro" }],
+  } as AttributeOut
+  const atual = {
+    VEHICLE_TYPE: { value_id: "1", value_name: "Carro" },
+    FLAVOR: { value_name: "Lichia" },
+  }
+  const payload = buildEditPayload([fixo, attr("FLAVOR", "Chocolate")], atual)
+  assert.deepEqual(payload, [{ attribute_id: "FLAVOR", value_id: undefined, value_name: "Lichia" }])
+})
+
 test("status editáveis batem com o backend", () => {
   for (const s of [
     "draft", "pending_title_approval", "pending_seller_attributes",

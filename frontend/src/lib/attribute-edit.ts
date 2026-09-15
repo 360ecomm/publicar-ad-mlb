@@ -1,4 +1,5 @@
 import type { AttributeOut, AttributesEditResponse, ListingStatus, ListingSummary } from "@/types/listing"
+import { isFixed } from "./attribute-visibility"
 
 /**
  * Espelha `EDITABLE_ATTRIBUTE_STATUSES` em `backend/app/models/listing.py`.
@@ -40,6 +41,26 @@ export interface AttributeEditItem {
  * campo escondido simplesmente não entra e nada é apagado. Em correção esse
  * mesmo filtro tornaria impossível limpar um campo: o operador apagaria o
  * texto, o item sumiria do payload e o backend nunca saberia.
+ *
+ * Atributo `fixed` NUNCA entra: o campo é `readOnly` no formulário, então o
+ * valor que está ali jamais foi digitado pelo operador. Quando nada está
+ * gravado no banco, `AttributeForm` o pré-preenche com o único
+ * `allowed_value` — pré-preenchimento necessário no modo de PREENCHIMENTO
+ * (o backend não pré-preenche `fixed`, e sem ele o obrigatório nunca
+ * validaria), mas que em CORREÇÃO viraria um "vazio no servidor → valor no
+ * formulário" e seguiria no PATCH como alteração do operador. O estrago é de
+ * auditoria: grava um atributo que ele nunca viu, o evento diz "2 atributos
+ * alterados" em vez de 1, e esse atributo extra pode marcar a ficha técnica
+ * como desatualizada — mandando regerar uma imagem por uma mudança que não
+ * foi dele. Exatamente o tipo de dado falso que este branch existe para
+ * eliminar.
+ *
+ * O corte fica AQUI, e não no estado inicial do formulário por modo, porque
+ * o pré-preenchimento também alimenta a validação de obrigatórios da tela
+ * (`handleSubmit`): tirá-lo em modo `edit` deixaria um `fixed` obrigatório
+ * sem valor gravado permanentemente insalvável — o operador veria "preencha
+ * os campos obrigatórios" num campo que ele não pode preencher. Filtrar no
+ * payload preserva a tela e ainda assim manda só o que é do operador.
  */
 export function buildEditPayload(
   attributes: AttributeOut[],
@@ -47,6 +68,7 @@ export function buildEditPayload(
 ): AttributeEditItem[] {
   const items: AttributeEditItem[] = []
   for (const attr of attributes) {
+    if (isFixed(attr)) continue
     const atual = values[attr.attribute_id]
     if (!atual) continue
     const antes = (attr.value_name ?? "").trim()
