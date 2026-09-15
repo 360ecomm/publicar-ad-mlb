@@ -3,13 +3,14 @@
 Em `ready_to_publish` as 5 posicoes estao aprovadas. Regenerar ali DESAPROVA
 a posicao pedida e devolve o anuncio a `pending_image_approval` — sem isso o
 endpoint devolveria 409 em 100% dos casos, e o worker
-(`image_tasks._regenerate_position_async`) pularia a task, deixando o
-placeholder preso para sempre."""
+(`image_tasks.py:708`) apagaria o placeholder sozinho ao ver o anuncio fora
+de `pending_image_approval`: um no-op silencioso, sem erro visivel."""
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 
 def _listing(status):
@@ -54,19 +55,28 @@ class TestReadyToPublish:
         assert aprovada.status == "uploaded"
         assert listing.status == "pending_image_approval"
         task.delay.assert_called_once()
+        # protege contra um commit intermediario que persista a desaprovacao
+        # sem o placeholder (deixaria o anuncio desaprovado sem nada rodando)
+        db.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_volta_para_revisao_mesmo_com_a_posicao_ja_nao_aprovada(self):
         """Anuncio que chegou a ready_to_publish com 4 de 5 aprovadas: sem
-        esta regra o status ficaria em ready_to_publish, o worker pularia a
-        task pelo guard de status e o placeholder ficaria preso."""
+        esta regra o status ficaria em ready_to_publish e o worker
+        (`image_tasks.py:708`) apagaria o placeholder sozinho — a
+        regeneracao nunca aconteceria, sem ninguem perceber."""
         from app.services.listing_service import ListingService
 
+        nao_aprovada = _linha(approved=False, status="validation_failed")
         listing = _listing("ready_to_publish")
-        db = _db([_linha(approved=False, status="uploaded")])
-        with patch("app.workers.tasks.image_tasks.regenerate_position"):
+        db = _db([nao_aprovada])
+        with patch("app.workers.tasks.image_tasks.regenerate_position") as task:
             await ListingService(db).regenerate_position(listing, 3)
         assert listing.status == "pending_image_approval"
+        task.delay.assert_called_once()
+        # a linha nao aprovada nao pode ser tocada: apagaria a evidencia do
+        # QA (validation_failed) sem nenhum teste perceber
+        assert nao_aprovada.status == "validation_failed"
 
     @pytest.mark.asyncio
     async def test_cria_o_placeholder_e_enfileira(self):
@@ -82,6 +92,53 @@ class TestReadyToPublish:
         assert placeholder.approved is False
         assert placeholder.sort_order == 0
         task.delay.assert_called_once()
+
+
+class TestBrokerForaCompensaReadyToPublish:
+    """O 503 abaixo afirma "o pedido nao foi registrado". Vindo de
+    ready_to_publish isso so e' verdade se a desaprovacao e a volta de
+    status tambem forem desfeitas — senao o operador leria "nada aconteceu"
+    vendo o anuncio ter andado para tras de verdade."""
+
+    @pytest.mark.asyncio
+    async def test_broker_fora_restaura_aprovacao_e_status_original(self):
+        from app.services.listing_service import ListingService
+
+        aprovada = _linha(approved=True)
+        listing = _listing("ready_to_publish")
+        db = _db([aprovada])
+        with patch("app.workers.tasks.image_tasks.regenerate_position") as task:
+            task.delay = MagicMock(side_effect=Exception("redis down"))
+            with pytest.raises(HTTPException) as exc:
+                await ListingService(db).regenerate_position(listing, 4)
+        assert exc.value.status_code == 503
+        db.delete.assert_awaited_once()
+        assert listing.status == "ready_to_publish"
+        assert aprovada.approved is True
+        assert aprovada.status == "approved"
+
+    @pytest.mark.asyncio
+    async def test_compensacao_que_estoura_integrity_error_vira_503_proprio_sem_500(self):
+        from app.services.listing_service import ListingService
+
+        aprovada = _linha(approved=True)
+        listing = _listing("ready_to_publish")
+        db = _db([aprovada])
+        chamadas = []
+
+        async def commit_side_effect():
+            chamadas.append(1)
+            if len(chamadas) == 2:  # 1a = placeholder OK; 2a = compensacao falha
+                raise IntegrityError("UPDATE", {}, Exception("uq_listing_images_cover_slot"))
+
+        db.commit = AsyncMock(side_effect=commit_side_effect)
+        with patch("app.workers.tasks.image_tasks.regenerate_position") as task:
+            task.delay = MagicMock(side_effect=Exception("redis down"))
+            with pytest.raises(HTTPException) as exc:
+                await ListingService(db).regenerate_position(listing, 4)
+        assert exc.value.status_code == 503
+        assert "não foi possível desfazer" in exc.value.detail
+        db.rollback.assert_awaited_once()
 
 
 class TestPendingImageApprovalNaoMuda:

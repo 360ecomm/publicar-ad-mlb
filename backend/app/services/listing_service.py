@@ -616,6 +616,8 @@ class ListingService:
                 )
             )
         ).scalars().all()
+        status_original = listing.status
+        desaprovadas: list[ListingImage] = []
         if listing.status == "ready_to_publish":
             # Desaprova SO esta posicao e devolve o anuncio a revisao, na
             # mesma transacao do placeholder. `status="uploaded"` (e nao
@@ -625,13 +627,15 @@ class ListingService:
             #
             # A volta acontece MESMO quando a posicao ja nao estava aprovada:
             # um anuncio pode chegar a `ready_to_publish` com 4 de 5, e sem
-            # a mudanca de status o worker pularia a task pelo proprio guard
-            # (`image_tasks._regenerate_position_async`), deixando o
-            # placeholder preso para sempre.
-            for img in ocupantes:
-                if img.approved:
-                    img.approved = False
-                    img.status = "uploaded"
+            # a mudanca de status o worker (`image_tasks.py:708`) apagaria o
+            # placeholder ao ver o anuncio fora de `pending_image_approval` e
+            # nada mais aconteceria — um no-op silencioso: a tela mostra
+            # "gerando", o placeholder some sozinho, nenhuma imagem nova
+            # aparece e nenhum erro e mostrado.
+            desaprovadas = [img for img in ocupantes if img.approved]
+            for img in desaprovadas:
+                img.approved = False
+                img.status = "uploaded"
             listing.status = "pending_image_approval"
         elif any(img.approved for img in ocupantes):
             raise HTTPException(
@@ -664,10 +668,43 @@ class ListingService:
         try:
             regenerate_position.delay(str(listing.id), str(placeholder.id))
         except Exception as exc:  # broker fora (Redis): sem task, o placeholder
-            # seria uma trava eterna — bloqueia as aprovacoes deste anuncio e o
-            # indice unico parcial recusa qualquer nova tentativa na posicao.
+            # seria um no-op silencioso (o worker o apaga sozinho, ver
+            # image_tasks.py:708) — bloqueia tambem as aprovacoes deste
+            # anuncio e o indice unico parcial recusa qualquer nova tentativa
+            # na posicao.
             await self.db.delete(placeholder)
-            await self.db.commit()
+            if status_original == "ready_to_publish":
+                # Compensacao por verdade: a mensagem de 503 abaixo afirma
+                # que "o pedido nao foi registrado". Sem desfazer a
+                # desaprovacao e a volta de status feitas acima, isso seria
+                # mentira — o anuncio teria mesmo saido de `ready_to_publish`
+                # e perdido uma aprovacao. Mesmo commit que apaga o
+                # placeholder.
+                for img in desaprovadas:
+                    img.approved = True
+                    img.status = "approved"
+                listing.status = "ready_to_publish"
+            try:
+                await self.db.commit()
+            except IntegrityError as integrity_exc:
+                # Restaurar `approved=True` numa posicao de capa/ficha toca
+                # `uq_listing_images_cover_slot`/`_specs_slot`. Na pratica o
+                # slot esta livre (foi liberado nesta mesma requisicao), mas
+                # se a compensacao estourar mesmo assim, o 503 nao pode virar
+                # 500 por cima dele.
+                await self.db.rollback()
+                logger.error(
+                    "regen_posicao listing_id=%s posicao=%s result=compensacao_falhou reason=%s",
+                    listing.id, posicao, integrity_exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=(
+                        "Fila de processamento indisponível e não foi possível desfazer a "
+                        "mudança; o anúncio voltou para revisão de imagens — aprove as "
+                        "imagens de novo."
+                    ),
+                )
             logger.error(
                 "regen_posicao listing_id=%s posicao=%s result=fila_indisponivel reason=%s",
                 listing.id, posicao, exc,

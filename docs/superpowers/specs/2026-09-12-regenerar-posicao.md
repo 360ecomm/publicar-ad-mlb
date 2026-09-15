@@ -15,6 +15,10 @@ precisa de um botão "gerar de novo" por posição.
 - **Só posição não aprovada.** Regenerar uma posição já aprovada é recusado
   (409). Imagem aprovada não é substituída por trás do operador.
 - **Só em `pending_image_approval`.** Em qualquer outro status, 409 legível.
+  **Atualização (2026-09-15, Task 5):** passou a aceitar também
+  `ready_to_publish` — nesse status as 5 posições já estão aprovadas, então
+  regenerar desaprova a posição pedida e devolve o anúncio a
+  `pending_image_approval` na mesma transação do placeholder.
 - **A posição 0 mantém o fallback da capa determinística** quando a IA falha,
   mesmo comportamento da geração completa.
 - **Uma posição por chamada.**
@@ -74,9 +78,14 @@ precisa de um botão "gerar de novo" por posição.
 POST /api/v1/listings/{listing_id}/images/positions/{posicao}/regenerate
   202 → ImageOut do placeholder (status="generating")
   404 → anúncio não é do seller ativo
-  409 → status ≠ pending_image_approval | posição aprovada | regeneração em andamento
+  409 → status fora de pending_image_approval/ready_to_publish | posição
+        aprovada (em pending_image_approval) | regeneração em andamento
   422 → posição fora de 0..4
 ```
+
+A partir de `ready_to_publish` (Task 5, 2026-09-15): a posição pedida é
+desaprovada e o anúncio volta para `pending_image_approval`, na mesma
+transação do placeholder.
 
 Task Celery `app.workers.tasks.image_tasks.regenerate_position(listing_id,
 image_id)`, fila `images` (mesma rota das outras tasks do módulo).
