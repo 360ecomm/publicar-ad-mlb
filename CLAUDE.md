@@ -12,7 +12,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Frontend | Next.js 14 (App Router) + TypeScript + Tailwind + shadcn/ui |
 | Storage de imagens | Fotos brutas: bucket público do seller (leitura por URL). Imagens geradas: bucket R2 dedicado `r2-mktp-img-ia` via API S3 (`r2_asset_service`) — **funciona da VPS; o ISP local bloqueia o endpoint S3**, então prova de R2 só a partir do servidor |
 | Infra local | Docker Compose |
-| Infra produção | **VPS própria** (VPS-B, alias SSH `VPS-B-srv1985744`, Ubuntu 24.04) + Docker Compose + Nginx como proxy reverso + Let's Encrypt. Backend e frontend **no ar** em `https://ads.360ecomm.com.br` desde 2026-09-17 (ver "Produção (VPS-B)") |
+| Infra produção | **VPS própria** (VPS-B, alias SSH `VPS-B-srv1985744`, Ubuntu 26.04 LTS) + Docker Compose + Nginx como proxy reverso + Let's Encrypt. Backend e frontend **no ar** em `https://ads.360ecomm.com.br` desde 2026-09-17 (ver "Produção (VPS-B)") |
 
 ---
 
