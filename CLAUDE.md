@@ -164,6 +164,41 @@ docker compose -p publicar-ad-mlb -f docker-compose.prod.yml exec backend pytest
 
 ---
 
+## Pendências — requisições longas e lotes (investigação de 2026-09-18)
+
+Leitura de código, **sem correção**. A decisão de converter espera amostra
+real: o log de tempo do Nginx (`/var/log/nginx/ads-timing.log` na VPS-B,
+formato `timing` com `$request_time` e `$upstream_response_time`, ligado em
+2026-09-18 14:55) **e** uso real do pipeline naquela máquina — até ali nenhum
+anúncio tinha sido processado na VPS-B, e o log padrão não tinha tempo.
+
+- **Upload de produtos é o único lote síncrono que escala.**
+  `POST /products/upload` faz `upsert` com **`commit` por linha, dentro da
+  requisição**, até 10.000 linhas, sem fila por trás. É o caminho que o
+  operador usa de verdade: 4 SKUs levam segundos, 2.000 são 2.000 transações
+  em série numa requisição HTTP. **Candidato número 1 a conversão**, não as
+  variantes. (`POST /import` também insere até 5.000 linhas na requisição,
+  mas numa transação só, e o trabalho pesado vai para `process_batch`.)
+- **As variantes de capa e ficha passam de 30s por construção, e nenhuma
+  tela as chama.** `cover-ai-variant` e `specs-ai-variant` encadeiam R2 →
+  OpenAI (90s) → upload ML (60s × 3 tentativas) → R2 dentro do handler; o
+  Nginx corta em 120s. Zero referências em `frontend/src`. Converter quando
+  ganharem botão. Se o navegador desistir no meio, **a imagem paga não se
+  perde**: o uvicorn (0.32.1, httptools) não cancela o handler, `send` vira
+  no-op e o `commit` grava a candidata; só a resposta some.
+- **Cliente R2 sem `Config`** (`r2_asset_service.py`): única chamada externa
+  sem limite explícito; fica nos padrões do botocore (60s de conexão, 60s de
+  leitura, com novas tentativas). Todo `httpx` tem timeout.
+- **Worker único, `--concurrency=2`, servindo as 4 filas**
+  (`default,images,ai,publish`). Duas gerações de imagem em andamento ocupam
+  os dois slots e seguram publicação e texto até terminarem. Com volume, isso
+  pesa mais que qualquer tempo limite de requisição.
+- **Nenhuma task tem limite de tempo** (`task_time_limit` /
+  `soft_time_limit` ausentes). `acks_late=True` + `prefetch_multiplier=1`
+  reentrega task de worker morto; task travada segura o slot para sempre.
+
+---
+
 ## Variáveis de ambiente
 
 Copie `.env.example` para `.env`. NUNCA commite `.env`.
