@@ -33,7 +33,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Quick fixes F-1..F-4 | ✅ | Resiliência do pipeline de imagens: ensure_dimensions seguro, _mark_failed robusto, ImageRateLimitError + backoff 429 |
 | SPEC-012 | ✅ | Resiliência estrutural do pipeline de imagens (token refresh, idempotência, Celery chain, lock otimista) |
 | Trilha 2 · Fase 3 | ♻️ | Cards de benefício com Pillow (benefícios / modo de uso / especificações). **Substituídos pelo esquema de 5 posições e removidos em 2026-09-10** — a copy do LLM sobrevive na posição 2 (`benefits_ai`) |
-| Fase 5a | ✅ | Artefatos de produção: `Dockerfile.prod` multi-stage non-root, `docker-compose.prod.yml`, `.dockerignore`, limites de memória. Correção de segurança: `/openapi.json` fechado fora de development. **Registro histórico:** os dois `Dockerfile.prod` continuam sendo os de produção; o `docker-compose.prod.yml` era o da VPS-A e **não é o que roda desde 2026-09-17** (o compose real vive em `/srv/apps/ads/` na VPS-B) |
+| Fase 5a | ✅ | Artefatos de produção: `Dockerfile.prod` multi-stage non-root, `docker-compose.prod.yml`, `.dockerignore`, limites de memória. Correção de segurança: `/openapi.json` fechado fora de development. **Registro histórico:** o `docker-compose.prod.yml` daquela época era o da VPS-A; de 2026-09-17 a 2026-09-18 o compose real viveu só no servidor, e desde `2c431e6` (2026-09-18) o arquivo do repositório voltou a ser o que roda, agora com o conteúdo da VPS-B |
 | Fase 5b | ✅ | Deploy na VPS: vhost + TLS, `.env` de produção gerado do zero, stack no ar, migrations aplicadas. Correção de 2 bugs de OAuth |
 | Fase 5c | ✅ | **Primeiro anúncio real publicado**: `MLB5145387291` (SKU 37, Wepink Martin). Validação de `allowed_values`, modo catálogo (`family_name`), cards a partir da capa determinística |
 | Frentes A e B | ✅ | Variante de capa e ficha técnica por IA sob demanda: `cover_variant_service`, `specs_variant_service`, `promote_cover`, `promote_specs`, `replace_item_pictures`. Candidato nasce `approved=False` e só vai ao ar por ação humana |
@@ -120,7 +120,7 @@ mapa; conferido no servidor em 2026-09-18.
 | Vhost | `/etc/nginx/sites-available/ads.360ecomm.com.br`: `location /api/` → `127.0.0.1:8000`, `location /` → `127.0.0.1:3001`, `proxy_read_timeout 120s`, `client_max_body_size 10m`, `/docs`, `/redoc` e `/openapi.json` bloqueados nas duas formas. Log adicional com `$request_time` em `/var/log/nginx/ads-timing.log` (desde 2026-09-18) |
 | Certificado | wildcard `*.360ecomm.com.br` em `/etc/letsencrypt/live/360ecomm.com.br/`, renovado pelo `certbot.timer` |
 | Código | clone `/srv/src/ads` (branch `master`), alimentado pelo bare `/srv/src/ads.git` via `git push vps master` (remote `vps` = `szurc@2.25.227.117:/srv/src/ads.git`; GitHub continua `origin`). **Nunca servido pelo Nginx** |
-| Config de produção | `/srv/apps/ads/`: `docker-compose.yml` (**não** é o `docker-compose.prod.yml` do repositório), `.env` (`600 szurc`, gerado do zero) e `redis.conf`. `.env` nunca entra na imagem |
+| Compose de produção | **`docker-compose.prod.yml` do repositório**, lido do clone (`/srv/src/ads/docker-compose.prod.yml`) desde 2026-09-18 (`2c431e6`). Invocado sempre com `--project-directory /srv/apps/ads`, onde ficam `.env` (`600 szurc`, gerado do zero, com `ADS_SRC=/srv/src/ads` para o contexto de build) e `redis.conf`. Não existe mais compose no servidor; `.env` nunca entra na imagem. Mudança de infraestrutura é commit + `git push vps master` + `ads-deploy.sh`; conferir antes com `docker compose -f ... --project-directory /srv/apps/ads config` |
 | Contêineres | projeto compose `ads`: `ads-backend`, `ads-celery-worker`, `ads-celery-beat` (os três com a **mesma** imagem `ads-backend`; só `backend` tem `build:`), `ads-frontend`, `ads-postgres`, `ads-redis` |
 | Portas (só loopback) | backend `127.0.0.1:8000` → 8000; frontend `127.0.0.1:3001` → 3000. Postgres e Redis sem `ports:`. Registro em `/srv/PORTAS.md` |
 | Banco | Postgres 16, banco **`ads`**, role **`ads_user`** (renomeados de `publicar_ad_mlb`/`mlb_user` em 2026-09-18; a role é a de bootstrap, só pode ser renomeada, nunca removida). Console: `docker exec -it ads-postgres psql -U ads_user -d ads` |
@@ -135,12 +135,13 @@ sudo /usr/local/bin/ads-deploy.sh          # pull --ff-only, build de TODAS as i
 CHECK_ONLY=1 sudo -E /usr/local/bin/ads-deploy.sh   # só a verificação
 
 # Migrations — passo manual e deliberado, nunca automático no boot (o script de deploy NÃO roda)
-docker compose -f /srv/apps/ads/docker-compose.yml run --rm backend alembic upgrade head
+C="docker compose -f /srv/src/ads/docker-compose.prod.yml --project-directory /srv/apps/ads"
+$C run --rm backend alembic upgrade head
 
-# Operação
-cd /srv/apps/ads && docker compose ps
-docker compose logs -f --tail 100 backend      # ou celery-worker, celery-beat, frontend
-docker compose exec backend pytest -q          # a suíte roda dentro da imagem de produção
+# Operação (mesmo $C: não há compose em /srv/apps/ads)
+$C ps
+$C logs -f --tail 100 backend      # ou celery-worker, celery-beat, frontend
+$C exec backend pytest -q          # a suíte roda dentro da imagem de produção
 ```
 
 > **Serviços que compartilham código são rebuildados juntos, sempre.** Na
@@ -512,7 +513,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `batch_import.py` — BatchImport + BatchImportRow
 
 ### Arquivos de produção (raiz e backend/)
-- `docker-compose.prod.yml` — **não é o compose que roda em produção** (desde 2026-09-17 é `/srv/apps/ads/docker-compose.yml` na VPS-B, fora do repositório). É o da VPS-A: `-p publicar-ad-mlb`, backend em `127.0.0.1:8010`, frontend em `8011`. Editar este arquivo e fazer deploy não muda nada no servidor. Destino do arquivo em decisão (cabeçalho de aviso, remoção ou trazer o compose real para o repositório)
+- `docker-compose.prod.yml` — **é o compose que roda em produção** na VPS-B desde `2c431e6` (2026-09-18): `name: ads` (fixa projeto, volumes `ads_*` e rede `ads_default`), uma imagem `ads-backend` para backend/worker/beat, contexto de build `${ADS_SRC}/backend|frontend` interpolado do `.env` de `/srv/apps/ads` via `--project-directory`. Provado por diff vazio de `docker compose config` contra o compose que vivia no servidor e por um deploy real sem mudança de código (contagens, volumes e rede idênticos). **Voltar o código para antes de `2c431e6` traz de volta a versão da VPS-A deste arquivo** — ver o aviso de rollback em `/srv/DEPLOY.md`
 - `backend/Dockerfile.prod` — multi-stage (toolchain fica no estágio de build), usuário non-root `appuser` uid 10001, uvicorn com 2 workers e sem `--reload`
 - `backend/.dockerignore` — exclui `.env` explicitamente, como rede de segurança caso o build context mude de `./backend` para `.`
 - `backend/pytest.ini` — `cache_dir = /tmp/pytest_cache`: `/app` pertence ao root e o processo roda como `appuser`. Dar `chown` em `/app` deixaria o código gravável pelo usuário de runtime, anulando metade do ganho do non-root
