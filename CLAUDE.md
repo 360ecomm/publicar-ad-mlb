@@ -104,43 +104,59 @@ cd frontend && npm run build  # checar erros TS
 
 ---
 
-## Produção (VPS)
+## Produção (VPS-B)
+
+**A aplicação roda na VPS-B desde 2026-09-17.** A VPS-A (`vps-360`,
+`app.360ecomm.com.br`, `/root/publicar-ad-mlb`, portas 8010/8011) foi
+desativada nesse dia e fica de pé só até 30/09/2026, sem serviço. **A fonte
+viva é `/srv/DEPLOY.md` na própria VPS-B** — padrões da máquina, rollback,
+regra do refresh token de uso único, renomeação do banco. Esta seção é só o
+mapa; conferido no servidor em 2026-09-18.
 
 | Item | Valor |
 |---|---|
-| Domínio | `https://app.360ecomm.com.br` (Cloudflare, **DNS only** — proxy laranja ainda não ativado) |
-| Acesso | alias SSH `vps-360` (ver `CLAUDE.md` global para as regras de SSH) |
-| Diretório do projeto | `/root/publicar-ad-mlb` (fora de qualquer `root` do Nginx) |
-| `.env` de produção | `/root/publicar-ad-mlb/.env`, `600 root:root` — gerado do zero, nada copiado do dev |
-| Porta interna (backend) | `127.0.0.1:8010` → 8000 no container. **Só loopback**; quem fala com ela é o Nginx |
-| Porta interna (frontend) | `127.0.0.1:8011` → 3000 no container. Serviço `frontend` do `docker-compose.prod.yml`, imagem `frontend/Dockerfile.prod` (Node 24 alpine, multi-stage, `output: "standalone"`, non-root `appuser` uid 10001, `mem_limit: 512m`). **Vhost no ar desde 2026-09-13**: `location /api/` → 8010, `location /` → 8011, bloqueio de `/docs`, `/redoc` e `/openapi.json` nas duas formas (`(/api)?`) por regex; backup do vhost anterior em `/root/backups/vhost-app.360ecomm-20260913.bak` |
-| Vhost | `/etc/nginx/sites-available/app.360ecomm.com.br` |
-| Certificado | Let's Encrypt via `certbot --nginx`, renovação pelo `certbot.timer` já existente |
-| Código | `git pull` via deploy key dedicada (alias SSH `github-admlb`) |
+| Servidor | VPS-B, `srv1985744`, IP `2.25.227.117`, alias SSH `VPS-B-srv1985744` (user `szurc`; regras de SSH no `CLAUDE.md` global). 4 vCPU, 15 GiB de RAM, **zero swap**, dividida com `etiquetas-zpl` |
+| Domínio | `https://ads.360ecomm.com.br` (Cloudflare, **DNS only**: o registro A resolve direto para `2.25.227.117`) |
+| Vhost | `/etc/nginx/sites-available/ads.360ecomm.com.br`: `location /api/` → `127.0.0.1:8000`, `location /` → `127.0.0.1:3001`, `proxy_read_timeout 120s`, `client_max_body_size 10m`, `/docs`, `/redoc` e `/openapi.json` bloqueados nas duas formas. Log adicional com `$request_time` em `/var/log/nginx/ads-timing.log` (desde 2026-09-18) |
+| Certificado | wildcard `*.360ecomm.com.br` em `/etc/letsencrypt/live/360ecomm.com.br/`, renovado pelo `certbot.timer` |
+| Código | clone `/srv/src/ads` (branch `master`), alimentado pelo bare `/srv/src/ads.git` via `git push vps master` (remote `vps` = `szurc@2.25.227.117:/srv/src/ads.git`; GitHub continua `origin`). **Nunca servido pelo Nginx** |
+| Config de produção | `/srv/apps/ads/`: `docker-compose.yml` (**não** é o `docker-compose.prod.yml` do repositório), `.env` (`600 szurc`, gerado do zero) e `redis.conf`. `.env` nunca entra na imagem |
+| Contêineres | projeto compose `ads`: `ads-backend`, `ads-celery-worker`, `ads-celery-beat` (os três com a **mesma** imagem `ads-backend`; só `backend` tem `build:`), `ads-frontend`, `ads-postgres`, `ads-redis` |
+| Portas (só loopback) | backend `127.0.0.1:8000` → 8000; frontend `127.0.0.1:3001` → 3000. Postgres e Redis sem `ports:`. Registro em `/srv/PORTAS.md` |
+| Banco | Postgres 16, banco **`ads`**, role **`ads_user`** (renomeados de `publicar_ad_mlb`/`mlb_user` em 2026-09-18; a role é a de bootstrap, só pode ser renomeada, nunca removida). Console: `docker exec -it ads-postgres psql -U ads_user -d ads` |
+| Worker | 1 contêiner, `--concurrency=2`, consome `default,images,ai,publish`; beat com schedule em volume próprio |
+| Backup | diário 03:30 (`vpsb-backup.sh`, `pg_dumpall` + Drive) em `/srv/backups/daily/`; manuais em `/srv/backups/manual/` |
 
 ```bash
-# Sempre com -p: o nome de projeto derivado do diretório colide com o de dev
-docker compose -p publicar-ad-mlb -f docker-compose.prod.yml up -d --build
+# Deploy (na máquina local, depois na VPS-B)
+git push vps master
+sudo /usr/local/bin/ads-deploy.sh          # pull --ff-only, build de TODAS as imagens, up -d --force-recreate
+                                           # dos 4 serviços de app, verificação por id de imagem (aborta se divergir)
+CHECK_ONLY=1 sudo -E /usr/local/bin/ads-deploy.sh   # só a verificação
 
-# Migrations — passo manual e deliberado, nunca automático no boot
-docker compose -p publicar-ad-mlb -f docker-compose.prod.yml run --rm backend alembic upgrade head
+# Migrations — passo manual e deliberado, nunca automático no boot (o script de deploy NÃO roda)
+docker compose -f /srv/apps/ads/docker-compose.yml run --rm backend alembic upgrade head
 
-# Diagnóstico pós-deploy: a suíte roda dentro da imagem de produção
-docker compose -p publicar-ad-mlb -f docker-compose.prod.yml exec backend pytest -q
+# Operação
+cd /srv/apps/ads && docker compose ps
+docker compose logs -f --tail 100 backend      # ou celery-worker, celery-beat, frontend
+docker compose exec backend pytest -q          # a suíte roda dentro da imagem de produção
 ```
 
-> **Ordem de deploy desta branch (`feat/contas-e-seletor`): frontend primeiro,
-> backend depois, `FRONTEND_URL` por último.** Motivo: o backend novo
-> redireciona o retorno do OAuth para `/contas`, rota que o frontend em
-> produção (build anterior) não tem — backend antes do frontend vira 404 numa
-> autorização bem-sucedida; frontend antes é seguro (o retorno antigo
-> `/settings?ml_connected=true` cai no `/settings` novo, que ignora o
-> parâmetro). Depois dos dois: `FRONTEND_URL=https://app.360ecomm.com.br` no
-> `.env` + `up -d --force-recreate backend` (conferir por hash). Migração
-> `b8e2d4f6a1c3` com `alembic upgrade head` antes de subir o backend novo.
-> **Desconectar é esquecimento só local**: apaga o token só aqui; a
-> autorização do app no ML não é revogada (não há chamada a
-> `DELETE /users/{id}/applications/{app_id}`).
+> **Serviços que compartilham código são rebuildados juntos, sempre.** Na
+> VPS-A um `build backend` isolado deixou worker e beat com código de 12/09
+> enquanto backend e banco já estavam em 13/09 — o worker publicava com uma
+> regra de token diferente, sem erro visível. Na VPS-B isso é impossível por
+> construção (uma imagem, três contêineres), e o `ads-deploy.sh` aborta se
+> algum dos três rodar um id de imagem diferente da recém-construída.
+
+> **Antes de todo deploy, preservar a imagem anterior à mão:**
+> `docker tag ads-backend:latest ads-backend:<commit-atual>` (e `ads-frontend`).
+> O rollback sem rebuild está descrito em `/srv/DEPLOY.md`.
+
+> **Refresh token do ML é de uso único.** Nunca renovar por script nem rodar
+> a aplicação em duas máquinas ao mesmo tempo: a primeira que renovar invalida
+> a outra. Detalhe e ordem de virada em `/srv/DEPLOY.md`.
 
 > **`docker compose restart` NÃO relê o `env_file`.** As variáveis são fixadas na
 > criação do container. Depois de mudar o `.env`, use
@@ -148,10 +164,13 @@ docker compose -p publicar-ad-mlb -f docker-compose.prod.yml exec backend pytest
 > comprimento: dois segredos diferentes com o mesmo tamanho fazem a checagem por
 > comprimento passar com o valor velho carregado.
 
-> **Limites de memória são obrigatórios aqui.** A VPS tem 2 vCPU, 7.8Gi de RAM e
-> **zero swap**, dividida com o Postgres do host, MariaDB e o app de outro
-> cliente. Sem `mem_limit`, estourar memória faz o OOM killer escolher uma vítima
-> qualquer — possivelmente o processo do vizinho.
+> **Limites de memória continuam obrigatórios.** Zero swap: sem `mem_limit`,
+> estourar memória faz o OOM killer escolher uma vítima qualquer, possivelmente
+> o contêiner do vizinho.
+
+> **Desconectar uma conta é esquecimento só local**: apaga o token só aqui; a
+> autorização do app no ML não é revogada (não há chamada a
+> `DELETE /users/{id}/applications/{app_id}`).
 
 ---
 
