@@ -135,13 +135,14 @@ sudo /usr/local/bin/ads-deploy.sh          # pull --ff-only, build de TODAS as i
 CHECK_ONLY=1 sudo -E /usr/local/bin/ads-deploy.sh   # só a verificação
 
 # Migrations — passo manual e deliberado, nunca automático no boot (o script de deploy NÃO roda)
-C="docker compose -f /srv/src/ads/docker-compose.prod.yml --project-directory /srv/apps/ads"
-$C run --rm backend alembic upgrade head
+ads-compose run --rm backend alembic upgrade head
 
-# Operação (mesmo $C: não há compose em /srv/apps/ads)
-$C ps
-$C logs -f --tail 100 backend      # ou celery-worker, celery-beat, frontend
-$C exec backend pytest -q          # a suíte roda dentro da imagem de produção
+# Operação: `ads-compose` (/usr/local/bin, fora do repositório) = docker compose -f /srv/src/ads/docker-compose.prod.yml
+# --project-directory /srv/apps/ads, de qualquer diretório. Não há compose em /srv/apps/ads, e COMPOSE_FILE no .env
+# NÃO serve (config/up/run resolveriam env_file e redis.conf em /srv/src/ads; testado em 2026-09-18)
+ads-compose ps
+ads-compose logs -f --tail 100 backend      # ou celery-worker, celery-beat, frontend
+ads-compose exec backend pytest -q          # a suíte roda dentro da imagem de produção
 ```
 
 > **Serviços que compartilham código são rebuildados juntos, sempre.** Na
