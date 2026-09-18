@@ -191,13 +191,27 @@ formato `timing` com `$request_time` e `$upstream_response_time`, ligado em
 2026-09-18 14:55) **e** uso real do pipeline naquela máquina — até ali nenhum
 anúncio tinha sido processado na VPS-B, e o log padrão não tinha tempo.
 
-- **Upload de produtos é o único lote síncrono que escala.**
-  `POST /products/upload` faz `upsert` com **`commit` por linha, dentro da
-  requisição**, até 10.000 linhas, sem fila por trás. É o caminho que o
-  operador usa de verdade: 4 SKUs levam segundos, 2.000 são 2.000 transações
-  em série numa requisição HTTP. **Candidato número 1 a conversão**, não as
-  variantes. (`POST /import` também insere até 5.000 linhas na requisição,
-  mas numa transação só, e o trabalho pesado vai para `process_batch`.)
+- **Upload de produtos é o único lote síncrono que escala — e foi medido
+  em 2026-09-18 na VPS-B: escala, mas cabe.** `POST /products/upload` faz
+  `upsert` com **`commit` por linha, dentro da requisição**, até 10.000
+  linhas, sem fila por trás. Três uploads de SKUs fictícios, só inserção,
+  disparados da própria VPS-B (sem tempo de rede), máquina ociosa, lidos do
+  `ads-timing.log` (`rt`/`urt`):
+
+  | Linhas | `rt` | por linha |
+  |---|---|---|
+  | 50 | 0,158s | 3,2 ms |
+  | 500 | 1,328s | 2,7 ms |
+  | 2.000 | 6,000s | 3,0 ms |
+
+  Linear em ~3 ms por linha: o teto de 10.000 linhas dá ~30s, e os 120s do
+  Nginx só seriam alcançados perto de 40.000 linhas, que o endpoint recusa.
+  **A conversão deixou de ser prioridade**; volta se o tempo por linha
+  subir (banco sob carga, upload pela internet com arquivo grande) ou se o
+  teto de linhas mudar. Produtos de teste removidos com backup em
+  `/srv/backups/manual/perf-teste-upload-20260918-152216/`. (`POST /import`
+  também insere até 5.000 linhas na requisição, mas numa transação só, e o
+  trabalho pesado vai para `process_batch`.)
 - **As variantes de capa e ficha passam de 30s por construção, e nenhuma
   tela as chama.** `cover-ai-variant` e `specs-ai-variant` encadeiam R2 →
   OpenAI (90s) → upload ML (60s × 3 tentativas) → R2 dentro do handler; o
@@ -215,6 +229,32 @@ anúncio tinha sido processado na VPS-B, e o log padrão não tinha tempo.
 - **Nenhuma task tem limite de tempo** (`task_time_limit` /
   `soft_time_limit` ausentes). `acks_late=True` + `prefetch_multiplier=1`
   reentrega task de worker morto; task travada segura o slot para sempre.
+
+**Tempos reais do pipeline, extraídos do worker da VPS-A em 2026-09-18.**
+A VPS-A expira em 30/09/2026 e os logs vão junto; este é o único registro.
+Amostra de **13 a 17/09** (o contêiner do worker foi recriado em 13/09, nada
+antes disso sobreviveu): na prática a prova do lote de 14/09 com 4 SKUs.
+**n é pequeno** — trate como ordem de grandeza, não como distribuição.
+
+| Task | n | p50 | máx | Observação |
+|---|---|---|---|---|
+| `generate_images` (5 posições) | 3 | 220s | 241s | 214, 220 e 241s: consistente |
+| `generate_title` | 9 | 5,2s | 13,1s | Gemini |
+| `predict_category` | 9 | 1,0s | 1,7s | 2 chamadas ao ML |
+| `generate_description` | 1 | 2,7s | | |
+| `publish_listing` | 1 | 1,9s | | |
+| OpenAI `images/edits` (uma posição) | 15 | 40,3s | 66,1s | mín 34,9s; p95 51,3s |
+
+Dentro de `generate_images`: fotos brutas 3–4s, copy do LLM 1–3s, e cada
+posição 37–68s, dos quais **a OpenAI é ~95%** (upload ao ML 0,9–1,5s, `put`
+no R2 0,8–1,7s). As 5 posições rodam **em série** na mesma task. Espera na
+fila foi zero em todas as execuções, mas só havia 4 SKUs.
+
+**O que isso significa em escala:** com um worker de 2 lugares e 220s por
+anúncio, **100 SKUs levam ~3h e 2.000 SKUs ~61h**. Esse é o gargalo real do
+"1 clique para N SKUs", e ele **não** é o tempo limite de requisição: é
+capacidade do worker (concorrência, paralelismo das posições) e a latência
+do motor de imagem.
 
 ---
 
