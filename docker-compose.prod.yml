@@ -1,117 +1,79 @@
-# Compose de PRODUCAO. O de desenvolvimento (`docker-compose.yml`) continua
-# valendo e nao e sobrescrito por este — os dois convivem no repo.
+# docker-compose.prod.yml — stack de produção do ads na VPS-B (srv1985744, https://ads.360ecomm.com.br)
 #
-# Diferencas deliberadas em relacao ao de dev:
-#   - imagem construida com Dockerfile.prod (multi-stage, non-root)
-#   - nenhum bind mount de codigo: o que roda e o que foi assado na imagem
-#   - postgres e redis SEM `ports:` — alcancaveis so pela rede interna
-#   - backend e frontend publicados apenas em 127.0.0.1, para o Nginx do host
-#     fazer proxy (mesmo dominio: `/api` -> backend, o resto -> frontend)
-#   - sem pgadmin
+# ESTE ARQUIVO É O QUE RODA EM PRODUÇÃO. O servidor lê o clone em /srv/src/ads e roda:
+#   docker compose -f /srv/src/ads/docker-compose.prod.yml --project-directory /srv/apps/ads ...
+# via /usr/local/bin/ads-deploy.sh. Padrões da máquina, rollback e regra do refresh token: /srv/DEPLOY.md.
 #
-# CUIDADO com o nome do projeto. O Compose deriva o nome do diretorio, que e o
-# MESMO para este arquivo e para o de dev. Rodar sem `-p` na maquina de
-# desenvolvimento faz o Compose convergir o projeto de dev para esta
-# definicao: derruba pgadmin e frontend e recria backend/worker/beat com a
-# imagem de producao. Sempre isole com `-p`:
+#   código  : ${ADS_SRC} = /srv/src/ads   (clone git; o build lê daqui — nunca servido pelo Nginx).
+#             ADS_SRC vem do .env de /srv/apps/ads (o Compose lê o .env do diretório do projeto para interpolar).
+#   config  : /srv/apps/ads               (--project-directory: .env + redis.conf; nada disso entra na imagem nem no git)
+#   portas  : 127.0.0.1:3001 frontend, 127.0.0.1:8000 backend -> Nginx (ads.360ecomm.com.br). Em /srv/PORTAS.md
+#   nomes   : hífen em tudo que é de sistema; banco `ads`, role `ads_user` (renomeados de publicar_ad_mlb/mlb_user em 2026-09-18)
 #
-#   docker compose -p publicaradmlb-prod -f docker-compose.prod.yml up -d --build
+# UMA imagem para backend, celery-worker e celery-beat (ads-backend). Só o serviço `backend` tem
+# `build:`; worker e beat usam `image: ads-backend` + `pull_policy: never`. Assim é IMPOSSÍVEL
+# rebuildar um e esquecer os outros (lição da VPS-A, ver /srv/DEPLOY.md): `docker compose build`
+# gera a imagem uma vez e `up -d --force-recreate` recria os três.
 #
-# Na VPS isso e inofensivo (nao ha stack de dev la), mas o habito evita o
-# acidente aqui.
+# `name: ads` fixa o nome do projeto: os volumes são ads_postgres-data, ads_redis-data e
+# ads_celerybeat-data, e a rede ads_default. Mudar o nome do projeto = perder o banco de vista.
 #
-# TETO DE MEMORIA — por que cada servico tem `mem_limit`:
-# A VPS de destino tem 2 vCPU, 7.8Gi de RAM e ZERO swap, e ja divide a maquina
-# com Postgres do host, MariaDB e o app de etiquetas de outro cliente. Sem
-# swap, estourar a memoria nao degrada: o OOM killer do kernel escolhe uma
-# vitima na hora, e ela pode ser o processo do vizinho, nao o nosso. O
-# `mem_limit` transforma "derrubei o app de outro cliente" em "meu container
-# reiniciou", que e uma falha nossa, contida e visivel.
+# Migrations NÃO rodam no boot (CMD é só uvicorn). Passo manual e deliberado:
+#   docker compose -f /srv/src/ads/docker-compose.prod.yml --project-directory /srv/apps/ads run --rm backend alembic upgrade head
 #
-# Os valores saem de medicao real dos containers ociosos (backend 141MiB,
-# worker 131MiB, beat 42MiB, postgres 39MiB, redis 12MiB), com folga para o
-# pico. Teto somado: 2.9Gi (2.4Gi do backend e infra + 512M do frontend, desde
-# 2026-09-13), deixando ~3.3Gi livres na VPS.
-#
-# Subir:
-#   docker compose -f docker-compose.prod.yml up -d --build
-# Migrations (passo manual e deliberado, nunca automatico no boot):
-#   docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head
-# Diagnostico pos-deploy:
-#   docker compose -f docker-compose.prod.yml exec backend pytest -q
+# Histórico: até 2026-09-17 este arquivo descrevia a VPS-A (-p publicar-ad-mlb, portas 8010/8011); de
+# 2026-09-17 a 2026-09-18 o compose real viveu só no servidor (/srv/apps/ads/docker-compose.yml) e foi
+# trazido para cá sem mudança de comportamento (ensaio por diff de `docker compose config`).
+name: ads
 
 services:
-
-  # ── Banco de dados ───────────────────────────────────────
   postgres:
     image: postgres:16-alpine
+    container_name: ads-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - postgres_data_prod:/var/lib/postgresql/data
-    # 512M: medicao ociosa deu 39MiB, mas o teto real e o `shared_buffers`
-    # (128MB no default do postgres:16) somado a work_mem por conexao. 512M
-    # cobre o default com folga sem reservar RAM que a VPS nao tem sobrando.
+      - postgres-data:/var/lib/postgresql/data
     mem_limit: 512m
-    # Sem `ports:` de proposito. O `ufw` NAO filtra portas publicadas via
-    # Docker: publicar 5432 aqui exporia o banco na internet mesmo com o
-    # firewall fechado. Os outros servicos alcancam pelo DNS interno do
-    # compose (`postgres:5432`).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── Cache e fila ─────────────────────────────────────────
   redis:
     image: redis:7-alpine
+    container_name: ads-redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     volumes:
-      - redis_data_prod:/data
-    # 256M. ATENCAO: o redis aqui nao tem `maxmemory` configurado, entao ele
-    # cresce ate o teto do container e ai e morto pelo OOM — levando a fila do
-    # Celery junto. Com `result_expires=86400` os resultados ficam 24h na
-    # memoria. 256M e folgado para o volume atual, mas se a fila crescer, o
-    # certo e configurar `maxmemory` no redis, nao so subir este numero.
+      - redis-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
     mem_limit: 256m
-    # Sem `ports:` — mesma razao do postgres.
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      # a senha vai por variável de ambiente só do processo redis-cli, nunca por argumento
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(sed -n 's/^requirepass //p' /usr/local/etc/redis/redis.conf) redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── API Backend ──────────────────────────────────────────
   backend:
     build:
-      context: ./backend
+      context: ${ADS_SRC}/backend
       dockerfile: Dockerfile.prod
+    image: ads-backend
+    container_name: ads-backend
     restart: unless-stopped
-    # Publicado SO no loopback: quem fala com esta porta e o Nginx do host,
-    # via proxy reverso. `"8010:8000"` (sem o 127.0.0.1) abriria em todas as
-    # interfaces e furaria o ufw, porque o Docker escreve as proprias regras
-    # de NAT antes das do firewall.
-    # 8010 evita as portas ja documentadas deste projeto: 8001 (backend dev),
-    # 5433, 6379, 3000, 5050.
     ports:
-      - "127.0.0.1:8010:8000"
-    # 512M para os 2 workers uvicorn. Medicao ociosa: 141MiB com 1 processo.
-    # A API e leve — nao processa imagem, so fala com banco/Redis e enfileira.
+      - "127.0.0.1:8000:8000"
     mem_limit: 512m
-    env_file:
-      - .env
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      # Trava explicita: `Settings.environment` tem default "development", e
-      # `main.py` so desliga o /docs quando o valor NAO e "development".
-      # Setar aqui garante o Swagger fechado mesmo que o .env de producao
-      # esqueca a variavel — nao dependemos de alguem lembrar.
       ENVIRONMENT: production
     depends_on:
       postgres:
@@ -119,98 +81,60 @@ services:
       redis:
         condition: service_healthy
 
-  # ── Celery Worker ────────────────────────────────────────
-  celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.prod
+  celery-worker:
+    image: ads-backend
+    pull_policy: never
+    container_name: ads-celery-worker
     restart: unless-stopped
-    # 1G — o teto mais alto da stack, e o unico servico que merece. E aqui que
-    # o Pillow abre imagem: uma 1200x1200 RGB sao ~4.3MB de pixel cru, e o
-    # pipeline mantem varias copias vivas ao mesmo tempo (foto bruta baixada,
-    # variante do motor, normalizada, card renderizado), vezes a concorrencia.
-    # Medicao ociosa foi 131MiB; o resto e folga para o pico.
     mem_limit: 1g
-    # Sem `ports:` — worker nao atende ninguem de fora, so consome fila.
-    env_file:
-      - .env
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENVIRONMENT: production
     depends_on:
+      backend:
+        condition: service_started
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # concurrency=2 casado com os 2 vCPU da VPS. Estava 4, herdado do compose
-    # de dev, onde nao havia vizinho para prejudicar. Em 2 vCPU, 4 workers de
-    # imagem so aumentam troca de contexto e pico de memoria sem entregar mais
-    # vazao — o gargalo e CPU/IO, nao numero de processos.
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q default,images,ai,publish
 
-  # ── Celery Beat (agendador) ──────────────────────────────
-  # Desde 2026-09-10 o beat TEM trabalho: `celery_app.py` agenda
-  # `check-pending-raw-photos` e `check-pending-ai-engine` a cada 15 min, que
-  # retomam listings parados em `pending_raw_photos` (fotos chegaram ao
-  # bucket) e `pending_ai_engine` (motor OpenAI voltou). Desligar este
-  # servico NAO da erro em lugar nenhum: os standbys simplesmente nunca mais
-  # sao retomados sozinhos, so pelos endpoints manuais. Nao e candidato a
-  # sair da stack por memoria.
-  celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.prod
+  celery-beat:
+    image: ads-backend
+    pull_policy: never
+    container_name: ads-celery-beat
     restart: unless-stopped
-    # 128M: o beat so ENVIA duas mensagens a cada 15 min; quem executa as
-    # tarefas e o celery_worker. Medido em producao em 2026-09-11, ja com as
-    # duas tarefas agendadas: 42.69MiB (33% do teto). Teto baixo de
-    # proposito: se este container crescer, e sintoma de bug, nao de carga.
     mem_limit: 128m
-    # Sem `ports:`.
-    env_file:
-      - .env
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENVIRONMENT: production
     depends_on:
+      backend:
+        condition: service_started
       redis:
         condition: service_healthy
     volumes:
-      # O schedule sobrevive a recriacao do container. Rodando non-root, o
-      # caminho precisa pertencer ao appuser — /app e do root na imagem.
-      - celerybeat_data_prod:/home/appuser/celerybeat
+      - celerybeat-data:/home/appuser/celerybeat
     command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/home/appuser/celerybeat/celerybeat-schedule
 
-  # ── Frontend (Next.js) ───────────────────────────────────
   frontend:
     build:
-      context: ./frontend
+      context: ${ADS_SRC}/frontend
       dockerfile: Dockerfile.prod
+    image: ads-frontend
+    container_name: ads-frontend
     restart: unless-stopped
-    # Loopback, mesma razao do backend. 8011 fica ao lado do 8010: os dois
-    # servicos deste projeto sao vizinhos no mesmo vhost (o Nginx manda `/api`
-    # para 8010 e o resto para 8011). Livre na VPS em 2026-09-13; em uso no
-    # loopback naquela data: 3005 e 3006 (apps de outro cliente), 3306, 5432,
-    # 8010.
     ports:
-      - "127.0.0.1:8011:3000"
-    # 512M. Medido em 2026-09-13 na maquina de dev, imagem identica: 61MiB
-    # ocioso, 64MiB depois de 50 requests em /login. E ~8x de folga para pico
-    # de SSR — deliberadamente generoso porque e o primeiro servico Node da
-    # stack e nao ha medicao em producao ainda; apertar depois de medir la.
-    # O `next build` NAO conta aqui: roda no `docker build`, fora de qualquer
-    # mem_limit, com pico de 1-2GiB — a VPS tinha 6.5Gi disponiveis na medicao.
+      - "127.0.0.1:3001:3000"
     mem_limit: 512m
-    # Sem `env_file`: o frontend nao tem segredo nenhum e nao le o .env. A URL
-    # da API e assada no BUILD como string vazia (= chamada relativa, mesmo
-    # dominio), ver frontend/Dockerfile.prod; variavel de runtime aqui nao a
-    # mudaria.
     depends_on:
       - backend
 
 volumes:
-  postgres_data_prod:
-  redis_data_prod:
-  celerybeat_data_prod:
+  postgres-data:
+  redis-data:
+  celerybeat-data:
