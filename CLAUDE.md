@@ -12,7 +12,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Frontend | Next.js 14 (App Router) + TypeScript + Tailwind + shadcn/ui |
 | Storage de imagens | Fotos brutas: bucket público do seller (leitura por URL). Imagens geradas: bucket R2 dedicado `r2-mktp-img-ia` via API S3 (`r2_asset_service`) — **funciona da VPS; o ISP local bloqueia o endpoint S3**, então prova de R2 só a partir do servidor |
 | Infra local | Docker Compose |
-| Infra produção | **VPS própria** (`vps-360`, Ubuntu 24.04) + Docker Compose + Nginx como proxy reverso + Let's Encrypt. Backend **no ar** em `https://app.360ecomm.com.br` |
+| Infra produção | **VPS própria** (VPS-B, alias SSH `VPS-B-srv1985744`, Ubuntu 24.04) + Docker Compose + Nginx como proxy reverso + Let's Encrypt. Backend e frontend **no ar** em `https://ads.360ecomm.com.br` desde 2026-09-17 (ver "Produção (VPS-B)") |
 
 ---
 
@@ -33,7 +33,7 @@ Sistema web para automação de criação e publicação de anúncios no Mercado
 | Quick fixes F-1..F-4 | ✅ | Resiliência do pipeline de imagens: ensure_dimensions seguro, _mark_failed robusto, ImageRateLimitError + backoff 429 |
 | SPEC-012 | ✅ | Resiliência estrutural do pipeline de imagens (token refresh, idempotência, Celery chain, lock otimista) |
 | Trilha 2 · Fase 3 | ♻️ | Cards de benefício com Pillow (benefícios / modo de uso / especificações). **Substituídos pelo esquema de 5 posições e removidos em 2026-09-10** — a copy do LLM sobrevive na posição 2 (`benefits_ai`) |
-| Fase 5a | ✅ | Artefatos de produção: `Dockerfile.prod` multi-stage non-root, `docker-compose.prod.yml`, `.dockerignore`, limites de memória. Correção de segurança: `/openapi.json` fechado fora de development |
+| Fase 5a | ✅ | Artefatos de produção: `Dockerfile.prod` multi-stage non-root, `docker-compose.prod.yml`, `.dockerignore`, limites de memória. Correção de segurança: `/openapi.json` fechado fora de development. **Registro histórico:** os dois `Dockerfile.prod` continuam sendo os de produção; o `docker-compose.prod.yml` era o da VPS-A e **não é o que roda desde 2026-09-17** (o compose real vive em `/srv/apps/ads/` na VPS-B) |
 | Fase 5b | ✅ | Deploy na VPS: vhost + TLS, `.env` de produção gerado do zero, stack no ar, migrations aplicadas. Correção de 2 bugs de OAuth |
 | Fase 5c | ✅ | **Primeiro anúncio real publicado**: `MLB5145387291` (SKU 37, Wepink Martin). Validação de `allowed_values`, modo catálogo (`family_name`), cards a partir da capa determinística |
 | Frentes A e B | ✅ | Variante de capa e ficha técnica por IA sob demanda: `cover_variant_service`, `specs_variant_service`, `promote_cover`, `promote_specs`, `replace_item_pictures`. Candidato nasce `approved=False` e só vai ao ar por ação humana |
@@ -283,13 +283,14 @@ Chaves relevantes:
   chamaria localhost. O `frontend/.dockerignore` barra o `.env.local` do build.
 - `ENVIRONMENT` — **default inseguro**: enquanto o valor for `development`, o
   `main.py` publica `/docs` **e** `/openapi.json`. Todo ambiente que não for dev
-  explícito precisa de `ENVIRONMENT=production`. O `docker-compose.prod.yml`
-  crava o valor nos 3 serviços para não depender do `.env` do servidor.
+  explícito precisa de `ENVIRONMENT=production`. O compose de produção
+  (`/srv/apps/ads/docker-compose.yml` na VPS-B) crava o valor nos 3 serviços
+  para não depender do `.env` do servidor, que também o define.
 - `FRONTEND_URL` — vazia por padrão. Vazia, o callback do OAuth devolve
   `{"status": "connected"}`; preenchida, redireciona para
-  `<FRONTEND_URL>/contas?ml_connected=true`. Produção precisa de
-  `FRONTEND_URL=https://app.360ecomm.com.br` no `.env` + `up -d --force-recreate
-  backend` (tarefa de deploy própria).
+  `<FRONTEND_URL>/contas?ml_connected=true`. Em produção está preenchida:
+  `FRONTEND_URL=https://ads.360ecomm.com.br` no `.env` da VPS-B (conferido
+  em 2026-09-18). Mudar exige `up -d --force-recreate backend`.
 - `ALLOWED_ORIGINS` — é `list[str]`, o pydantic-settings **só aceita JSON**.
   `ALLOWED_ORIGINS=https://x` derruba o boot com `SettingsError`; a forma certa é
   `ALLOWED_ORIGINS=["https://x"]`. Em produção está **omitida** de propósito.
@@ -511,7 +512,7 @@ Ver `app/core/security.py`: `hash_password()` e `verify_password()`.
 - `batch_import.py` — BatchImport + BatchImportRow
 
 ### Arquivos de produção (raiz e backend/)
-- `docker-compose.prod.yml` — stack de produção; `mem_limit` em todos os serviços, postgres/redis sem `ports:`, backend só em `127.0.0.1:8010`, sem pgadmin nem frontend
+- `docker-compose.prod.yml` — **não é o compose que roda em produção** (desde 2026-09-17 é `/srv/apps/ads/docker-compose.yml` na VPS-B, fora do repositório). É o da VPS-A: `-p publicar-ad-mlb`, backend em `127.0.0.1:8010`, frontend em `8011`. Editar este arquivo e fazer deploy não muda nada no servidor. Destino do arquivo em decisão (cabeçalho de aviso, remoção ou trazer o compose real para o repositório)
 - `backend/Dockerfile.prod` — multi-stage (toolchain fica no estágio de build), usuário non-root `appuser` uid 10001, uvicorn com 2 workers e sem `--reload`
 - `backend/.dockerignore` — exclui `.env` explicitamente, como rede de segurança caso o build context mude de `./backend` para `.`
 - `backend/pytest.ini` — `cache_dir = /tmp/pytest_cache`: `/app` pertence ao root e o processo roda como `appuser`. Dar `chown` em `/app` deixaria o código gravável pelo usuário de runtime, anulando metade do ganho do non-root
